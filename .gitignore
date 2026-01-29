@@ -1,0 +1,17 @@
+# macOS
+.DS_Store
+*.DS_Store
+
+# IDE
+.idea/
+*.iml
+
+# Build
+build/
+*.class
+*.jar
+
+# Flutter/Dart (ink_talk 내부에도 있지만 루트 레벨용)
+.dart_tool/
+.packages
+pubspec.lock

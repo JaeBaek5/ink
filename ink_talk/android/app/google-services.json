@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "770259883594",
+    "project_id": "ink-talk-24c71",
+    "storage_bucket": "ink-talk-24c71.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:770259883594:android:60b207d2a2d13d8592f8b3",
+        "android_client_info": {
+          "package_name": "com.example.ink_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBzdpUajxPiXDxo6qH2Y2JPX2i8KaF0ZTI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
