@@ -1,6 +1,7 @@
 {
   "project_info": {
     "project_number": "770259883594",
+    "firebase_url": "https://ink-talk-24c71-default-rtdb.asia-southeast1.firebasedatabase.app",
     "project_id": "ink-talk-24c71",
     "storage_bucket": "ink-talk-24c71.firebasestorage.app"
   },
@@ -12,7 +13,20 @@
           "package_name": "com.example.ink_app"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "770259883594-ejntivjgt9duscnha8opomepjpv0b4cv.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.ink_app",
+            "certificate_hash": "601e4b73836e19adb3540712fa9567437d35e0f5"
+          }
+        },
+        {
+          "client_id": "770259883594-h5unjjdbste2huluikk8orlr16c67ih8.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyBzdpUajxPiXDxo6qH2Y2JPX2i8KaF0ZTI"
@@ -20,7 +34,19 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "770259883594-h5unjjdbste2huluikk8orlr16c67ih8.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "770259883594-h2ut3junv0o39ugsvr5bidfq77migkls.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.inkApp"
+              }
+            }
+          ]
         }
       }
     }
