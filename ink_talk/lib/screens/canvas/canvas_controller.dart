@@ -6,6 +6,8 @@ import '../../models/stroke_model.dart';
 import '../../services/shape_service.dart';
 import '../../services/stroke_service.dart';
 import '../../services/text_service.dart';
+import '../../models/media_model.dart';
+import '../../services/media_service.dart';
 
 /// 펜 종류
 enum PenType {
@@ -85,9 +87,11 @@ class CanvasController extends ChangeNotifier {
   final StrokeService _strokeService = StrokeService();
   final TextService _textService = TextService();
   final ShapeService _shapeService = ShapeService();
+  final MediaService _mediaService = MediaService();
   StreamSubscription<List<StrokeModel>>? _strokesSubscription;
   StreamSubscription<List<MessageModel>>? _textsSubscription;
   StreamSubscription<List<ShapeModel>>? _shapesSubscription;
+  StreamSubscription<List<MediaModel>>? _mediaSubscription;
 
   String? _roomId;
   String? _userId;
@@ -139,6 +143,18 @@ class CanvasController extends ChangeNotifier {
   bool _snapEnabled = true;
   bool get snapEnabled => _snapEnabled;
   static const double gridSize = 25.0;
+
+  // 미디어 목록 (서버)
+  List<MediaModel> _serverMedia = [];
+  List<MediaModel> get serverMedia => _serverMedia;
+
+  // 선택된 미디어
+  MediaModel? _selectedMedia;
+  MediaModel? get selectedMedia => _selectedMedia;
+
+  // 미디어 업로드 중
+  bool _isUploading = false;
+  bool get isUploading => _isUploading;
 
   // 현재 펜
   PenType _currentPen = PenType.pen1;
@@ -269,11 +285,24 @@ class CanvasController extends ChangeNotifier {
         debugPrint('도형 스트림 오류: $e');
       },
     );
+
+    // 실시간 미디어 구독
+    _mediaSubscription?.cancel();
+    _mediaSubscription = _mediaService.getMediaStream(roomId).listen(
+      (media) {
+        _serverMedia = media;
+        notifyListeners();
+      },
+      onError: (e) {
+        debugPrint('미디어 스트림 오류: $e');
+      },
+    );
   }
 
   /// 입력 모드 변경
   void setInputMode(InputMode mode) {
     _inputMode = mode;
+    _selectedMedia = null;
     _selectedShape = null;
     notifyListeners();
   }
@@ -467,6 +496,198 @@ class CanvasController extends ChangeNotifier {
   Future<void> sendShapeToBack(String shapeId) async {
     if (_roomId == null) return;
     await _shapeService.sendToBack(_roomId!, shapeId);
+  }
+
+  // ===== 미디어 관련 =====
+
+  /// 이미지 업로드
+  Future<void> uploadImage(Offset position) async {
+    if (_roomId == null || _userId == null) return;
+
+    final file = await _mediaService.pickImage();
+    if (file == null) return;
+
+    _isUploading = true;
+    notifyListeners();
+
+    try {
+      final url = await _mediaService.uploadFile(
+        roomId: _roomId!,
+        filePath: file.path,
+        fileName: file.name,
+        type: MediaType.image,
+      );
+
+      final media = MediaModel(
+        id: '',
+        roomId: _roomId!,
+        senderId: _userId!,
+        type: MediaType.image,
+        url: url,
+        fileName: file.name,
+        x: position.dx,
+        y: position.dy,
+        width: 200,
+        height: 200,
+        zIndex: _getMaxMediaZIndex() + 1,
+        createdAt: DateTime.now(),
+      );
+
+      await _mediaService.saveMedia(media);
+    } catch (e) {
+      debugPrint('이미지 업로드 오류: $e');
+    }
+
+    _isUploading = false;
+    notifyListeners();
+  }
+
+  /// 영상 업로드
+  Future<void> uploadVideo(Offset position) async {
+    if (_roomId == null || _userId == null) return;
+
+    final file = await _mediaService.pickVideo();
+    if (file == null) return;
+
+    _isUploading = true;
+    notifyListeners();
+
+    try {
+      final url = await _mediaService.uploadFile(
+        roomId: _roomId!,
+        filePath: file.path,
+        fileName: file.name,
+        type: MediaType.video,
+      );
+
+      final media = MediaModel(
+        id: '',
+        roomId: _roomId!,
+        senderId: _userId!,
+        type: MediaType.video,
+        url: url,
+        fileName: file.name,
+        x: position.dx,
+        y: position.dy,
+        width: 300,
+        height: 200,
+        zIndex: _getMaxMediaZIndex() + 1,
+        createdAt: DateTime.now(),
+      );
+
+      await _mediaService.saveMedia(media);
+    } catch (e) {
+      debugPrint('영상 업로드 오류: $e');
+    }
+
+    _isUploading = false;
+    notifyListeners();
+  }
+
+  /// PDF 업로드
+  Future<void> uploadPdf(Offset position) async {
+    if (_roomId == null || _userId == null) return;
+
+    final file = await _mediaService.pickPdf();
+    if (file == null || file.path == null) return;
+
+    _isUploading = true;
+    notifyListeners();
+
+    try {
+      final url = await _mediaService.uploadFile(
+        roomId: _roomId!,
+        filePath: file.path!,
+        fileName: file.name,
+        type: MediaType.pdf,
+      );
+
+      final media = MediaModel(
+        id: '',
+        roomId: _roomId!,
+        senderId: _userId!,
+        type: MediaType.pdf,
+        url: url,
+        fileName: file.name,
+        fileSize: file.size,
+        x: position.dx,
+        y: position.dy,
+        width: 250,
+        height: 350,
+        zIndex: _getMaxMediaZIndex() + 1,
+        createdAt: DateTime.now(),
+      );
+
+      await _mediaService.saveMedia(media);
+    } catch (e) {
+      debugPrint('PDF 업로드 오류: $e');
+    }
+
+    _isUploading = false;
+    notifyListeners();
+  }
+
+  int _getMaxMediaZIndex() {
+    if (_serverMedia.isEmpty) return 0;
+    return _serverMedia.map((m) => m.zIndex).reduce((a, b) => a > b ? a : b);
+  }
+
+  /// 미디어 선택
+  void selectMedia(MediaModel? media) {
+    _selectedMedia = media;
+    _selectedShape = null;
+    notifyListeners();
+  }
+
+  /// 미디어 이동
+  Future<void> moveMedia(String mediaId, Offset delta) async {
+    if (_roomId == null) return;
+    final media = _serverMedia.firstWhere((m) => m.id == mediaId);
+    await _mediaService.updateMedia(
+      _roomId!,
+      mediaId,
+      x: media.x + delta.dx,
+      y: media.y + delta.dy,
+    );
+  }
+
+  /// 미디어 크기 조절
+  Future<void> resizeMedia(String mediaId, double width, double height) async {
+    if (_roomId == null) return;
+    await _mediaService.updateMedia(
+      _roomId!,
+      mediaId,
+      width: width,
+      height: height,
+    );
+  }
+
+  /// 미디어 투명도 설정
+  Future<void> setMediaOpacity(String mediaId, double opacity) async {
+    if (_roomId == null) return;
+    await _mediaService.updateMedia(_roomId!, mediaId, opacity: opacity);
+  }
+
+  /// 미디어 삭제
+  Future<void> deleteMedia(String mediaId) async {
+    if (_roomId == null) return;
+    await _mediaService.deleteMedia(_roomId!, mediaId);
+    if (_selectedMedia?.id == mediaId) {
+      _selectedMedia = null;
+      notifyListeners();
+    }
+  }
+
+  /// 미디어 앞으로
+  Future<void> bringMediaToFront(String mediaId) async {
+    if (_roomId == null) return;
+    await _mediaService.bringToFront(_roomId!, mediaId, _getMaxMediaZIndex());
+  }
+
+  /// 미디어 뒤로
+  Future<void> sendMediaToBack(String mediaId) async {
+    if (_roomId == null) return;
+    await _mediaService.sendToBack(_roomId!, mediaId);
   }
 
   /// 펜 선택
@@ -721,6 +942,7 @@ class CanvasController extends ChangeNotifier {
     _strokesSubscription?.cancel();
     _textsSubscription?.cancel();
     _shapesSubscription?.cancel();
+    _mediaSubscription?.cancel();
     _confirmTimer?.cancel();
     super.dispose();
   }

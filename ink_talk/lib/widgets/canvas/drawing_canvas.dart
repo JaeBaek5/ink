@@ -3,9 +3,11 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import '../../core/constants/app_colors.dart';
 import '../../models/message_model.dart';
+import '../../models/media_model.dart';
 import '../../models/shape_model.dart';
 import '../../models/stroke_model.dart';
 import '../../screens/canvas/canvas_controller.dart';
+import 'media_widget.dart';
 
 /// 드로잉 캔버스 위젯
 class DrawingCanvas extends StatefulWidget {
@@ -74,6 +76,18 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
                 size: Size.infinite,
               ),
             ),
+
+            // 미디어 오브젝트 렌더링
+            ...widget.controller.serverMedia.map((media) => MediaWidget(
+              key: ValueKey(media.id),
+              media: media,
+              isSelected: widget.controller.selectedMedia?.id == media.id,
+              canvasOffset: widget.controller.canvasOffset,
+              canvasScale: widget.controller.canvasScale,
+              onTap: () => widget.controller.selectMedia(media),
+              onLongPress: () => _showMediaOptions(context, media),
+              onMove: (delta) => widget.controller.moveMedia(media.id, delta),
+            )),
 
             // 텍스트 오브젝트 렌더링
             ...widget.controller.serverTexts.map((text) => _buildTextWidget(text)),
@@ -168,6 +182,112 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
               const SizedBox(height: 16),
             ],
           ),
+        );
+      },
+    );
+  }
+
+  /// 미디어 옵션 메뉴 (롱프레스)
+  void _showMediaOptions(BuildContext context, MediaModel media) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return Stack(
+          children: [
+            // Dim 배경
+            GestureDetector(
+              onTap: () => Navigator.pop(context),
+              child: Container(
+                color: Colors.black.withValues(alpha: 0.5),
+              ),
+            ),
+            // 옵션 메뉴
+            Positioned(
+              left: 16,
+              right: 16,
+              bottom: 16,
+              child: SafeArea(
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: AppColors.paper,
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 4,
+                        margin: const EdgeInsets.symmetric(vertical: 12),
+                        decoration: BoxDecoration(
+                          color: AppColors.border,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                      // 투명도 조절
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.opacity, color: AppColors.ink),
+                            const SizedBox(width: 12),
+                            const Text('투명도'),
+                            Expanded(
+                              child: StatefulBuilder(
+                                builder: (context, setState) {
+                                  double opacity = media.opacity;
+                                  return Slider(
+                                    value: opacity,
+                                    min: 0.1,
+                                    max: 1.0,
+                                    activeColor: AppColors.gold,
+                                    onChanged: (value) {
+                                      setState(() => opacity = value);
+                                    },
+                                    onChangeEnd: (value) {
+                                      widget.controller.setMediaOpacity(media.id, value);
+                                    },
+                                  );
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Divider(height: 1),
+                      ListTile(
+                        leading: const Icon(Icons.flip_to_front, color: AppColors.ink),
+                        title: const Text('앞으로'),
+                        onTap: () {
+                          Navigator.pop(context);
+                          widget.controller.bringMediaToFront(media.id);
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.flip_to_back, color: AppColors.ink),
+                        title: const Text('뒤로'),
+                        onTap: () {
+                          Navigator.pop(context);
+                          widget.controller.sendMediaToBack(media.id);
+                        },
+                      ),
+                      const Divider(height: 1),
+                      ListTile(
+                        leading: const Icon(Icons.delete_outline, color: Colors.red),
+                        title: const Text('삭제', style: TextStyle(color: Colors.red)),
+                        onTap: () {
+                          Navigator.pop(context);
+                          widget.controller.deleteMedia(media.id);
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
         );
       },
     );

@@ -59,6 +59,8 @@ class PenToolbar extends StatelessWidget {
 
             // 텍스트 버튼
             _buildTextButtons(),
+            _buildDivider(),
+            _buildMediaButtons(),
           ],
         ),
       ),
@@ -451,6 +453,71 @@ class PenToolbar extends StatelessWidget {
       case ShapeType.ellipse:
         return Icons.circle_outlined;
     }
+  }
+
+  Widget _buildMediaButtons() {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // 사진 업로드
+        Tooltip(
+          message: '사진',
+          child: InkWell(
+            onTap: () => controller.uploadImage(const Offset(100, 100)),
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              child: controller.isUploading
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: AppColors.gold,
+                      ),
+                    )
+                  : const Icon(
+                      Icons.image_outlined,
+                      size: 20,
+                      color: AppColors.ink,
+                    ),
+            ),
+          ),
+        ),
+        // 영상 업로드
+        Tooltip(
+          message: '영상',
+          child: InkWell(
+            onTap: () => controller.uploadVideo(const Offset(100, 100)),
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              child: const Icon(
+                Icons.videocam_outlined,
+                size: 20,
+                color: AppColors.ink,
+              ),
+            ),
+          ),
+        ),
+        // PDF 업로드
+        Tooltip(
+          message: 'PDF',
+          child: InkWell(
+            onTap: () => controller.uploadPdf(const Offset(100, 100)),
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              child: const Icon(
+                Icons.picture_as_pdf_outlined,
+                size: 20,
+                color: AppColors.ink,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
   }
 
   /// 텍스트 버튼
