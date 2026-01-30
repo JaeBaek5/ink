@@ -5,6 +5,7 @@ import '../../../models/room_model.dart';
 import '../../../providers/auth_provider.dart';
 import '../../../providers/room_provider.dart';
 import '../../../widgets/chat/puzzle_card.dart';
+import '../../canvas/canvas_screen.dart';
 import '../../chat/create_chat_screen.dart';
 
 /// 채팅 탭
@@ -112,11 +113,20 @@ class _ChatTabState extends State<ChatTab> {
 
   void _openRoom(RoomModel room) {
     final roomProvider = context.read<RoomProvider>();
+    final authProvider = context.read<AuthProvider>();
     roomProvider.selectRoom(room);
     
-    // TODO: 채팅방 화면으로 이동
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('${room.name ?? "채팅방"} 열기 (준비 중)')),
+    // 읽음 처리
+    if (authProvider.user != null) {
+      roomProvider.markAsRead(room.id, authProvider.user!.uid);
+    }
+    
+    // 캔버스 화면으로 이동
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => CanvasScreen(room: room),
+      ),
     );
   }
 

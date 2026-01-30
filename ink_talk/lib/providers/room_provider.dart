@@ -186,6 +186,25 @@ class RoomProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 테스트 채팅방 생성
+  Future<RoomModel?> createTestRoom(String userId) async {
+    _isLoading = true;
+    _errorMessage = null;
+    notifyListeners();
+
+    try {
+      final room = await _roomService.createTestRoom(userId);
+      _isLoading = false;
+      notifyListeners();
+      return room;
+    } catch (e) {
+      _errorMessage = e.toString().replaceAll('Exception: ', '');
+      _isLoading = false;
+      notifyListeners();
+      return null;
+    }
+  }
+
   /// 채팅방 이름 가져오기 (1:1의 경우 상대방 이름)
   String getRoomDisplayName(RoomModel room, String currentUserId) {
     if (room.name != null && room.name!.isNotEmpty) {

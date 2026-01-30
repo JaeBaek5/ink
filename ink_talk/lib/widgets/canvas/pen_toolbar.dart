@@ -1,0 +1,401 @@
+import 'package:flutter/material.dart';
+import '../../core/constants/app_colors.dart';
+import '../../screens/canvas/canvas_controller.dart';
+
+/// 펜 툴바 (상단 중앙)
+class PenToolbar extends StatelessWidget {
+  final CanvasController controller;
+
+  const PenToolbar({
+    super.key,
+    required this.controller,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: const BoxDecoration(
+        color: AppColors.paper,
+        border: Border(
+          bottom: BorderSide(color: AppColors.border),
+        ),
+      ),
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            // 펜 슬롯 (펜1, 펜2, 지우개)
+            _buildPenSlots(),
+
+            _buildDivider(),
+
+            // 선택 도구
+            _buildSelectionTools(),
+
+            _buildDivider(),
+
+            // 색상 슬롯
+            _buildColorSlots(context),
+
+            _buildDivider(),
+
+            // 굵기 슬롯
+            _buildWidthSlots(),
+
+            _buildDivider(),
+
+            // Undo / Redo
+            _buildUndoRedo(),
+
+            _buildDivider(),
+
+            // 도형 선택
+            _buildShapeButton(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDivider() {
+    return Container(
+      width: 1,
+      height: 24,
+      margin: const EdgeInsets.symmetric(horizontal: 8),
+      color: AppColors.border,
+    );
+  }
+
+  /// 펜 슬롯 (펜1, 펜2, 지우개)
+  Widget _buildPenSlots() {
+    return Row(
+      children: [
+        _buildPenButton(
+          PenType.pen1,
+          Icons.edit,
+          '펜 1',
+          controller.currentPen == PenType.pen1,
+        ),
+        _buildPenButton(
+          PenType.pen2,
+          Icons.edit_outlined,
+          '펜 2',
+          controller.currentPen == PenType.pen2,
+        ),
+        _buildPenButton(
+          PenType.eraser,
+          Icons.auto_fix_normal,
+          '지우개',
+          controller.currentPen == PenType.eraser,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildPenButton(
+    PenType type,
+    IconData icon,
+    String tooltip,
+    bool isSelected,
+  ) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: () => controller.selectPen(type),
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: isSelected ? AppColors.gold.withValues(alpha: 0.2) : null,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(
+            icon,
+            size: 20,
+            color: isSelected ? AppColors.gold : AppColors.ink,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 선택 도구 (라쏘/사각)
+  Widget _buildSelectionTools() {
+    return Row(
+      children: [
+        _buildSelectionButton(
+          SelectionTool.lasso,
+          Icons.gesture,
+          '자유형 선택',
+          controller.selectionTool == SelectionTool.lasso,
+        ),
+        _buildSelectionButton(
+          SelectionTool.rectangle,
+          Icons.crop_square,
+          '사각형 선택',
+          controller.selectionTool == SelectionTool.rectangle,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSelectionButton(
+    SelectionTool tool,
+    IconData icon,
+    String tooltip,
+    bool isSelected,
+  ) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: () => controller.selectSelectionTool(
+          isSelected ? SelectionTool.none : tool,
+        ),
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: isSelected ? AppColors.gold.withValues(alpha: 0.2) : null,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(
+            icon,
+            size: 20,
+            color: isSelected ? AppColors.gold : AppColors.mutedGray,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 색상 슬롯
+  Widget _buildColorSlots(BuildContext context) {
+    return Row(
+      children: [
+        // AUTO 버튼
+        Tooltip(
+          message: 'AUTO 색상',
+          child: InkWell(
+            onTap: controller.toggleAutoColor,
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+              decoration: BoxDecoration(
+                color: controller.isAutoColor
+                    ? AppColors.gold.withValues(alpha: 0.2)
+                    : null,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: controller.isAutoColor
+                      ? AppColors.gold
+                      : AppColors.border,
+                ),
+              ),
+              child: Text(
+                'AUTO',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  color: controller.isAutoColor
+                      ? AppColors.gold
+                      : AppColors.mutedGray,
+                ),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 4),
+        // 색상 슬롯
+        ...List.generate(3, (index) {
+          final isSelected = controller.selectedColorIndex == index &&
+              !controller.isAutoColor;
+          return GestureDetector(
+            onTap: () => controller.selectColor(index),
+            onLongPress: () => _showColorPicker(context, index),
+            child: Container(
+              width: 24,
+              height: 24,
+              margin: const EdgeInsets.symmetric(horizontal: 2),
+              decoration: BoxDecoration(
+                color: controller.colorSlots[index],
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: isSelected ? AppColors.gold : AppColors.border,
+                  width: isSelected ? 2 : 1,
+                ),
+              ),
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
+  void _showColorPicker(BuildContext context, int slotIndex) {
+    final colors = [
+      Colors.black,
+      Colors.white,
+      Colors.red,
+      Colors.pink,
+      Colors.orange,
+      Colors.yellow,
+      Colors.green,
+      Colors.teal,
+      Colors.blue,
+      Colors.indigo,
+      Colors.purple,
+      Colors.brown,
+      Colors.grey,
+    ];
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.paper,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  '색상 선택',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  children: colors.map((color) {
+                    return GestureDetector(
+                      onTap: () {
+                        controller.setSlotColor(slotIndex, color);
+                        Navigator.pop(context);
+                      },
+                      child: Container(
+                        width: 40,
+                        height: 40,
+                        decoration: BoxDecoration(
+                          color: color,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: AppColors.border),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 16),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  /// 굵기 슬롯
+  Widget _buildWidthSlots() {
+    return Row(
+      children: List.generate(3, (index) {
+        final width = controller.widthSlots[index];
+        final isSelected = controller.selectedWidthIndex == index;
+        
+        return Tooltip(
+          message: '굵기 ${width.toInt()}',
+          child: InkWell(
+            onTap: () => controller.selectWidth(index),
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: isSelected ? AppColors.gold.withValues(alpha: 0.2) : null,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Container(
+                width: 20,
+                height: 20,
+                alignment: Alignment.center,
+                child: Container(
+                  width: width + 2,
+                  height: width + 2,
+                  decoration: BoxDecoration(
+                    color: isSelected ? AppColors.gold : AppColors.ink,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      }),
+    );
+  }
+
+  /// Undo / Redo
+  Widget _buildUndoRedo() {
+    return Row(
+      children: [
+        Tooltip(
+          message: '되돌리기',
+          child: InkWell(
+            onTap: controller.canUndo ? controller.undo : null,
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              child: Icon(
+                Icons.undo,
+                size: 20,
+                color: controller.canUndo ? AppColors.ink : AppColors.mutedGray,
+              ),
+            ),
+          ),
+        ),
+        Tooltip(
+          message: '다시 실행',
+          child: InkWell(
+            onTap: controller.canRedo ? controller.redo : null,
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              child: Icon(
+                Icons.redo,
+                size: 20,
+                color: controller.canRedo ? AppColors.ink : AppColors.mutedGray,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 도형 선택
+  Widget _buildShapeButton() {
+    return Tooltip(
+      message: '도형',
+      child: InkWell(
+        onTap: () {
+          // TODO: 도형 선택 메뉴
+        },
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.all(8),
+          child: const Icon(
+            Icons.category_outlined,
+            size: 20,
+            color: AppColors.ink,
+          ),
+        ),
+      ),
+    );
+  }
+}

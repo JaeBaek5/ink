@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../providers/auth_provider.dart';
+import '../../../providers/room_provider.dart';
+import '../../canvas/canvas_screen.dart';
 
 /// 설정 탭
 class SettingsTab extends StatelessWidget {
@@ -140,6 +142,17 @@ class SettingsTab extends StatelessWidget {
           
           const Divider(),
           
+          // 개발자 옵션
+          _buildSectionHeader('개발자'),
+          ListTile(
+            leading: const Icon(Icons.science_outlined, color: AppColors.gold),
+            title: const Text('테스트 채팅방 생성'),
+            subtitle: const Text('캔버스 테스트용'),
+            onTap: () => _createTestRoom(context),
+          ),
+          
+          const Divider(),
+          
           // 계정
           _buildSectionHeader('계정'),
           ListTile(
@@ -167,6 +180,31 @@ class SettingsTab extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  Future<void> _createTestRoom(BuildContext context) async {
+    final authProvider = context.read<AuthProvider>();
+    final roomProvider = context.read<RoomProvider>();
+    final userId = authProvider.user?.uid;
+
+    if (userId == null) return;
+
+    // 테스트 채팅방 생성
+    final room = await roomProvider.createTestRoom(userId);
+
+    if (room != null && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('테스트 채팅방이 생성되었습니다!')),
+      );
+      
+      // 캔버스 화면으로 이동
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => CanvasScreen(room: room),
+        ),
+      );
+    }
   }
 
   Future<void> _handleSignOut(BuildContext context) async {

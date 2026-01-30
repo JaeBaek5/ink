@@ -253,4 +253,43 @@ class RoomService {
     if (!doc.exists) return null;
     return UserModel.fromFirestore(doc);
   }
+
+  /// 테스트용 채팅방 생성
+  Future<RoomModel> createTestRoom(String userId) async {
+    // 기존 테스트 채팅방 확인
+    final existingQuery = await _roomsCollection
+        .where('name', isEqualTo: '테스트용 채팅방')
+        .where('memberIds', arrayContains: userId)
+        .limit(1)
+        .get();
+
+    if (existingQuery.docs.isNotEmpty) {
+      return RoomModel.fromFirestore(existingQuery.docs.first);
+    }
+
+    // 새 테스트 채팅방 생성
+    final now = DateTime.now();
+    final roomData = {
+      'type': RoomType.group.name,
+      'name': '테스트용 채팅방',
+      'imageUrl': null,
+      'memberIds': [userId],
+      'members': {
+        userId: {
+          'userId': userId,
+          'role': MemberRole.owner.name,
+          'joinedAt': Timestamp.fromDate(now),
+          'unreadCount': 0,
+        },
+      },
+      'createdAt': Timestamp.fromDate(now),
+      'lastActivityAt': Timestamp.fromDate(now),
+      'lastEventType': 'system',
+      'lastEventPreview': '캔버스 테스트를 시작해보세요!',
+    };
+
+    final docRef = await _roomsCollection.add(roomData);
+    final newDoc = await docRef.get();
+    return RoomModel.fromFirestore(newDoc);
+  }
 }
