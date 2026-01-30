@@ -91,49 +91,62 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     _currentInputKind = event.kind;
     _clearTooltip();
 
-    // 펜 전용 모드 확인
-    final penOnlyMode = widget.controller.penOnlyMode;
-
-    // 패드에서 손가락은 이동/선택, 펜은 그리기
+    // 스타일러스는 항상 그리기
     final isStylus = event.kind == PointerDeviceKind.stylus ||
         event.kind == PointerDeviceKind.invertedStylus;
 
-    // penOnlyMode가 꺼져있으면 마우스/터치도 그리기 가능
-    final canDraw = isStylus || 
-        (!penOnlyMode && (event.kind == PointerDeviceKind.mouse || event.kind == PointerDeviceKind.touch));
+    if (isStylus) {
+      final localPoint = _transformPoint(event.localPosition);
+      widget.controller.startStroke(localPoint);
+      return;
+    }
 
-    if (canDraw) {
+    // 마우스/터치는 테스트 모드에 따라 결정
+    final isMouseOrTouch = event.kind == PointerDeviceKind.mouse || 
+        event.kind == PointerDeviceKind.touch;
+    
+    if (isMouseOrTouch && widget.controller.testDrawMode) {
+      // 테스트 그리기 모드: 마우스/터치로 그리기
       final localPoint = _transformPoint(event.localPosition);
       widget.controller.startStroke(localPoint);
     }
+    // testDrawMode가 false면 제스처 디텍터가 이동 처리
   }
 
   void _onPointerMove(PointerMoveEvent event) {
     if (_currentInputKind == null) return;
 
-    final penOnlyMode = widget.controller.penOnlyMode;
     final isStylus = _currentInputKind == PointerDeviceKind.stylus ||
         _currentInputKind == PointerDeviceKind.invertedStylus;
 
-    final canDraw = isStylus || 
-        (!penOnlyMode && (_currentInputKind == PointerDeviceKind.mouse || _currentInputKind == PointerDeviceKind.touch));
+    if (isStylus) {
+      final localPoint = _transformPoint(event.localPosition);
+      widget.controller.updateStroke(localPoint);
+      return;
+    }
 
-    if (canDraw) {
+    final isMouseOrTouch = _currentInputKind == PointerDeviceKind.mouse || 
+        _currentInputKind == PointerDeviceKind.touch;
+
+    if (isMouseOrTouch && widget.controller.testDrawMode) {
       final localPoint = _transformPoint(event.localPosition);
       widget.controller.updateStroke(localPoint);
     }
   }
 
   void _onPointerUp(PointerUpEvent event) {
-    final penOnlyMode = widget.controller.penOnlyMode;
     final isStylus = _currentInputKind == PointerDeviceKind.stylus ||
         _currentInputKind == PointerDeviceKind.invertedStylus;
 
-    final canDraw = isStylus || 
-        (!penOnlyMode && (_currentInputKind == PointerDeviceKind.mouse || _currentInputKind == PointerDeviceKind.touch));
-
-    if (canDraw) {
+    if (isStylus) {
       widget.controller.endStroke();
+    } else {
+      final isMouseOrTouch = _currentInputKind == PointerDeviceKind.mouse || 
+          _currentInputKind == PointerDeviceKind.touch;
+
+      if (isMouseOrTouch && widget.controller.testDrawMode) {
+        widget.controller.endStroke();
+      }
     }
 
     _currentInputKind = null;

@@ -64,44 +64,88 @@ class PenToolbar extends StatelessWidget {
     );
   }
 
-  /// 펜 전용 모드 토글 (테스트용 - TODO: 나중에 제거 또는 설정으로 이동)
+  /// 테스트 입력 모드 (펜/이동 분리) - TODO: 나중에 제거 또는 설정으로 이동
   Widget _buildPenOnlyToggle() {
-    final isOn = controller.penOnlyMode;
-    return Tooltip(
-      message: isOn ? '펜 전용 모드 ON (터치/마우스 불가)' : '펜 전용 모드 OFF (터치/마우스 가능)',
-      child: InkWell(
-        onTap: controller.togglePenOnlyMode,
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-          decoration: BoxDecoration(
-            color: isOn ? AppColors.gold.withValues(alpha: 0.2) : Colors.green.withValues(alpha: 0.2),
+    final isDrawMode = controller.testDrawMode;
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // 펜(그리기) 버튼
+        Tooltip(
+          message: '마우스/터치로 그리기',
+          child: InkWell(
+            onTap: () => controller.setTestDrawMode(true),
             borderRadius: BorderRadius.circular(8),
-            border: Border.all(
-              color: isOn ? AppColors.gold : Colors.green,
-            ),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                isOn ? Icons.edit : Icons.touch_app,
-                size: 16,
-                color: isOn ? AppColors.gold : Colors.green,
-              ),
-              const SizedBox(width: 4),
-              Text(
-                isOn ? 'PEN' : 'ALL',
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                  color: isOn ? AppColors.gold : Colors.green,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: isDrawMode ? AppColors.gold.withValues(alpha: 0.2) : null,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: isDrawMode ? AppColors.gold : AppColors.border,
                 ),
               ),
-            ],
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.edit,
+                    size: 16,
+                    color: isDrawMode ? AppColors.gold : AppColors.mutedGray,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    '펜',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: isDrawMode ? AppColors.gold : AppColors.mutedGray,
+                    ),
+                  ),
+                ],
+              ),
+            ),
           ),
         ),
-      ),
+        const SizedBox(width: 4),
+        // 이동 버튼
+        Tooltip(
+          message: '마우스/터치로 이동',
+          child: InkWell(
+            onTap: () => controller.setTestDrawMode(false),
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              decoration: BoxDecoration(
+                color: !isDrawMode ? Colors.blue.withValues(alpha: 0.2) : null,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: !isDrawMode ? Colors.blue : AppColors.border,
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    Icons.pan_tool,
+                    size: 16,
+                    color: !isDrawMode ? Colors.blue : AppColors.mutedGray,
+                  ),
+                  const SizedBox(width: 4),
+                  Text(
+                    '이동',
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      color: !isDrawMode ? Colors.blue : AppColors.mutedGray,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
