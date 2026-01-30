@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../../models/message_model.dart';
 import '../../models/stroke_model.dart';
 import '../../services/stroke_service.dart';
+import '../../services/text_service.dart';
 
 /// 펜 종류
 enum PenType {
@@ -68,14 +70,34 @@ class UserAutoColor {
   }
 }
 
+/// 입력 모드
+enum InputMode {
+  pen,       // 펜 그리기
+  text,      // 텍스트 입력
+  quickText, // 빠른 텍스트
+}
+
 /// 캔버스 컨트롤러 (실시간 동기화 포함)
 class CanvasController extends ChangeNotifier {
   final StrokeService _strokeService = StrokeService();
+  final TextService _textService = TextService();
   StreamSubscription<List<StrokeModel>>? _strokesSubscription;
+  StreamSubscription<List<MessageModel>>? _textsSubscription;
 
   String? _roomId;
   String? _userId;
   String? _userName;
+
+  // 입력 모드
+  InputMode _inputMode = InputMode.pen;
+  InputMode get inputMode => _inputMode;
+
+  // 텍스트 목록 (서버)
+  List<MessageModel> _serverTexts = [];
+  List<MessageModel> get serverTexts => _serverTexts;
+
+  // 빠른 텍스트 마지막 위치
+  Offset? _lastTextPosition;
 
   // 현재 펜
   PenType _currentPen = PenType.pen1;
@@ -182,6 +204,63 @@ class CanvasController extends ChangeNotifier {
         debugPrint('스트로크 스트림 오류: $e');
       },
     );
+
+    // 실시간 텍스트 구독
+    _textsSubscription?.cancel();
+    _textsSubscription = _textService.getTextsStream(roomId).listen(
+      (texts) {
+        _serverTexts = texts;
+        notifyListeners();
+      },
+      onError: (e) {
+        debugPrint('텍스트 스트림 오류: $e');
+      },
+    );
+  }
+
+  /// 입력 모드 변경
+  void setInputMode(InputMode mode) {
+    _inputMode = mode;
+    notifyListeners();
+  }
+
+  /// 텍스트 추가 (위치 지정형)
+  Future<void> addText(String content, Offset position, {
+    Color? color,
+    double fontSize = 16.0,
+  }) async {
+    if (_roomId == null || _userId == null || content.isEmpty) return;
+
+    final text = MessageModel(
+      id: '',
+      roomId: _roomId!,
+      senderId: _userId!,
+      type: MessageType.text,
+      content: content,
+      positionX: position.dx,
+      positionY: position.dy,
+      createdAt: DateTime.now(),
+    );
+
+    try {
+      await _textService.saveText(text);
+      _lastTextPosition = Offset(position.dx, position.dy + 30); // 다음 위치
+    } catch (e) {
+      debugPrint('텍스트 추가 오류: $e');
+    }
+  }
+
+  /// 빠른 텍스트 추가 (자동 배치)
+  Future<void> addQuickText(String content, {Color? color}) async {
+    // 마지막 위치 아래에 자동 배치
+    final position = _lastTextPosition ?? const Offset(50, 100);
+    await addText(content, position, color: color);
+  }
+
+  /// 텍스트 삭제
+  Future<void> deleteText(String textId) async {
+    if (_roomId == null) return;
+    await _textService.deleteText(_roomId!, textId);
   }
 
   /// 펜 선택
@@ -434,6 +513,7 @@ class CanvasController extends ChangeNotifier {
   @override
   void dispose() {
     _strokesSubscription?.cancel();
+    _textsSubscription?.cancel();
     _confirmTimer?.cancel();
     super.dispose();
   }

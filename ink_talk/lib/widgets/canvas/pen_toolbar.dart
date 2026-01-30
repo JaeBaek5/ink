@@ -53,6 +53,11 @@ class PenToolbar extends StatelessWidget {
 
             // 도형 선택
             _buildShapeButton(),
+
+            _buildDivider(),
+
+            // 텍스트 버튼
+            _buildTextButtons(),
           ],
         ),
       ),
@@ -397,5 +402,74 @@ class PenToolbar extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  /// 텍스트 버튼
+  Widget _buildTextButtons() {
+    final isTextMode = controller.inputMode == InputMode.text;
+    final isQuickTextMode = controller.inputMode == InputMode.quickText;
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // 위치 지정형 텍스트
+        Tooltip(
+          message: '텍스트 (위치 지정)',
+          child: InkWell(
+            onTap: () {
+              if (isTextMode) {
+                controller.setInputMode(InputMode.pen);
+              } else {
+                controller.setInputMode(InputMode.text);
+              }
+            },
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: isTextMode ? AppColors.gold.withValues(alpha: 0.2) : null,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(
+                Icons.text_fields,
+                size: 20,
+                color: isTextMode ? AppColors.gold : AppColors.ink,
+              ),
+            ),
+          ),
+        ),
+        // 빠른 텍스트
+        Tooltip(
+          message: '빠른 텍스트 (연속 작성)',
+          child: InkWell(
+            onTap: () {
+              if (isQuickTextMode) {
+                controller.setInputMode(InputMode.pen);
+              } else {
+                controller.setInputMode(InputMode.quickText);
+                _showQuickTextInput();
+              }
+            },
+            borderRadius: BorderRadius.circular(8),
+            child: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: isQuickTextMode ? AppColors.gold.withValues(alpha: 0.2) : null,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(
+                Icons.text_snippet_outlined,
+                size: 20,
+                color: isQuickTextMode ? AppColors.gold : AppColors.ink,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _showQuickTextInput() {
+    // 빠른 텍스트 입력은 CanvasScreen에서 처리
   }
 }

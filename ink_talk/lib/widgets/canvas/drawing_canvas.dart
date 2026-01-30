@@ -1,6 +1,7 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import '../../core/constants/app_colors.dart';
+import '../../models/message_model.dart';
 import '../../models/stroke_model.dart';
 import '../../screens/canvas/canvas_controller.dart';
 
@@ -41,7 +42,7 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
         onScaleStart: _onScaleStart,
         onScaleUpdate: _onScaleUpdate,
         onScaleEnd: _onScaleEnd,
-        // 짧은 탭 (작성자 표시)
+        // 짧은 탭 (텍스트 입력 또는 작성자 표시)
         onTapUp: _onTapUp,
         child: Stack(
           children: [
@@ -60,6 +61,9 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
                 size: Size.infinite,
               ),
             ),
+
+            // 텍스트 오브젝트 렌더링
+            ...widget.controller.serverTexts.map((text) => _buildTextWidget(text)),
 
             // 작성자 툴팁
             if (_hoveredAuthorName != null && _hoveredPosition != null)
@@ -84,6 +88,75 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
           ],
         ),
       ),
+    );
+  }
+
+  /// 텍스트 위젯 빌드
+  Widget _buildTextWidget(MessageModel text) {
+    final offset = widget.controller.canvasOffset;
+    final scale = widget.controller.canvasScale;
+    
+    final screenX = (text.positionX ?? 0) * scale + offset.dx;
+    final screenY = (text.positionY ?? 0) * scale + offset.dy;
+
+    return Positioned(
+      left: screenX,
+      top: screenY,
+      child: GestureDetector(
+        onLongPress: () => _showTextOptions(text),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+          decoration: BoxDecoration(
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Text(
+            text.content ?? '',
+            style: TextStyle(
+              color: AppColors.ink,
+              fontSize: 16 * scale,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 텍스트 옵션 메뉴
+  void _showTextOptions(MessageModel text) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.paper,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.symmetric(vertical: 12),
+                decoration: BoxDecoration(
+                  color: AppColors.border,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.delete_outline, color: Colors.red),
+                title: const Text('삭제', style: TextStyle(color: Colors.red)),
+                onTap: () {
+                  Navigator.pop(context);
+                  widget.controller.deleteText(text.id);
+                },
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -140,7 +213,64 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
   /// 짧은 탭 (폰에서 작성자 표시)
   void _onTapUp(TapUpDetails details) {
     final localPoint = _transformPoint(details.localPosition);
+    
+    // 텍스트 입력 모드
+    if (widget.controller.inputMode == InputMode.text) {
+      _showTextInputDialog(localPoint);
+      return;
+    }
+    
+    // 작성자 표시
     _checkAuthorAtPoint(localPoint, details.localPosition);
+  }
+
+  /// 텍스트 입력 다이얼로그
+  void _showTextInputDialog(Offset position) {
+    final textController = TextEditingController();
+    
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: AppColors.paper,
+          title: const Text('텍스트 입력'),
+          content: TextField(
+            controller: textController,
+            autofocus: true,
+            decoration: const InputDecoration(
+              hintText: '텍스트를 입력하세요',
+              border: OutlineInputBorder(),
+            ),
+            maxLines: 3,
+            onSubmitted: (value) {
+              if (value.isNotEmpty) {
+                widget.controller.addText(value, position);
+                Navigator.pop(context);
+              }
+            },
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('취소'),
+            ),
+            ElevatedButton(
+              onPressed: () {
+                if (textController.text.isNotEmpty) {
+                  widget.controller.addText(textController.text, position);
+                  Navigator.pop(context);
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.gold,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('추가'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   void _checkAuthorAtPoint(Offset canvasPoint, Offset screenPosition) {
