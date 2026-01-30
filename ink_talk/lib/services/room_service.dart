@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
 import '../models/room_model.dart';
 import '../models/user_model.dart';
 
@@ -256,15 +257,22 @@ class RoomService {
 
   /// 테스트용 채팅방 생성
   Future<RoomModel> createTestRoom(String userId) async {
-    // 기존 테스트 채팅방 확인
-    final existingQuery = await _roomsCollection
-        .where('name', isEqualTo: '테스트용 채팅방')
-        .where('memberIds', arrayContains: userId)
-        .limit(1)
-        .get();
+    // 기존 테스트 채팅방 확인 (단순 쿼리 - 인덱스 불필요)
+    try {
+      final existingQuery = await _roomsCollection
+          .where('memberIds', arrayContains: userId)
+          .get();
 
-    if (existingQuery.docs.isNotEmpty) {
-      return RoomModel.fromFirestore(existingQuery.docs.first);
+      // 클라이언트에서 이름 필터링
+      for (final doc in existingQuery.docs) {
+        final data = doc.data();
+        if (data['name'] == '테스트용 채팅방') {
+          return RoomModel.fromFirestore(doc);
+        }
+      }
+    } catch (e) {
+      // 쿼리 실패 시 무시하고 새로 생성
+      debugPrint('기존 테스트방 조회 실패: $e');
     }
 
     // 새 테스트 채팅방 생성
