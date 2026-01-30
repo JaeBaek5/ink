@@ -23,11 +23,31 @@ class CanvasScreen extends StatefulWidget {
 
 class _CanvasScreenState extends State<CanvasScreen> {
   late CanvasController _canvasController;
+  bool _isInitialized = false;
 
   @override
   void initState() {
     super.initState();
     _canvasController = CanvasController();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!_isInitialized) {
+      final authProvider = context.read<AuthProvider>();
+      final userId = authProvider.user?.uid;
+      final userName = authProvider.user?.displayName;
+      
+      if (userId != null) {
+        _canvasController.initialize(
+          widget.room.id,
+          userId,
+          userName: userName,
+        );
+        _isInitialized = true;
+      }
+    }
   }
 
   @override

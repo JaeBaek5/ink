@@ -1,6 +1,7 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import '../../core/constants/app_colors.dart';
+import '../../models/stroke_model.dart';
 import '../../screens/canvas/canvas_controller.dart';
 
 /// 드로잉 캔버스 위젯
@@ -24,27 +25,63 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
   // 입력 타입 (손가락 vs 스타일러스)
   PointerDeviceKind? _currentInputKind;
 
+  // 작성자 툴팁
+  String? _hoveredAuthorName;
+  Offset? _hoveredPosition;
+
   @override
   Widget build(BuildContext context) {
     return Listener(
       onPointerDown: _onPointerDown,
       onPointerMove: _onPointerMove,
       onPointerUp: _onPointerUp,
+      onPointerHover: _onPointerHover,
       child: GestureDetector(
         // 핀치 줌
         onScaleStart: _onScaleStart,
         onScaleUpdate: _onScaleUpdate,
         onScaleEnd: _onScaleEnd,
-        child: ClipRect(
-          child: CustomPaint(
-            painter: _CanvasPainter(
-              strokes: widget.controller.strokes,
-              currentStroke: widget.controller.currentStroke,
-              offset: widget.controller.canvasOffset,
-              scale: widget.controller.canvasScale,
+        // 짧은 탭 (작성자 표시)
+        onTapUp: _onTapUp,
+        child: Stack(
+          children: [
+            // 캔버스
+            ClipRect(
+              child: CustomPaint(
+                painter: _CanvasPainter(
+                  serverStrokes: widget.controller.serverStrokes,
+                  localStrokes: widget.controller.localStrokes,
+                  currentStroke: widget.controller.currentStroke,
+                  ghostStrokes: widget.controller.ghostStrokes.values.toList(),
+                  offset: widget.controller.canvasOffset,
+                  scale: widget.controller.canvasScale,
+                  currentUserId: widget.userId,
+                ),
+                size: Size.infinite,
+              ),
             ),
-            size: Size.infinite,
-          ),
+
+            // 작성자 툴팁
+            if (_hoveredAuthorName != null && _hoveredPosition != null)
+              Positioned(
+                left: _hoveredPosition!.dx + 10,
+                top: _hoveredPosition!.dy - 30,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: AppColors.ink.withValues(alpha: 0.8),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    _hoveredAuthorName!,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              ),
+          ],
         ),
       ),
     );
@@ -52,6 +89,7 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
 
   void _onPointerDown(PointerDownEvent event) {
     _currentInputKind = event.kind;
+    _clearTooltip();
 
     // 패드에서 손가락은 이동/선택, 펜은 그리기
     final isStylus = event.kind == PointerDeviceKind.stylus ||
@@ -60,9 +98,8 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     if (isStylus || event.kind == PointerDeviceKind.mouse) {
       // 펜 또는 마우스: 그리기
       final localPoint = _transformPoint(event.localPosition);
-      widget.controller.startStroke(localPoint, widget.userId);
+      widget.controller.startStroke(localPoint);
     }
-    // 터치는 제스처로 처리 (이동/줌)
   }
 
   void _onPointerMove(PointerMoveEvent event) {
@@ -86,6 +123,80 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     }
 
     _currentInputKind = null;
+  }
+
+  /// 펜 호버 (패드에서 작성자 표시)
+  void _onPointerHover(PointerHoverEvent event) {
+    final isStylus = event.kind == PointerDeviceKind.stylus ||
+        event.kind == PointerDeviceKind.invertedStylus;
+
+    if (!isStylus) return;
+
+    final localPoint = _transformPoint(event.localPosition);
+    _checkAuthorAtPoint(localPoint, event.localPosition);
+  }
+
+  /// 짧은 탭 (폰에서 작성자 표시)
+  void _onTapUp(TapUpDetails details) {
+    final localPoint = _transformPoint(details.localPosition);
+    _checkAuthorAtPoint(localPoint, details.localPosition);
+  }
+
+  void _checkAuthorAtPoint(Offset canvasPoint, Offset screenPosition) {
+    const hitRadius = 20.0;
+    String? authorName;
+
+    // 서버 스트로크에서 찾기
+    for (final stroke in widget.controller.serverStrokes.reversed) {
+      for (final p in stroke.points) {
+        final offset = Offset(p.x, p.y);
+        if ((offset - canvasPoint).distance < hitRadius) {
+          // TODO: 실제 사용자 이름 조회
+          authorName = '사용자 ${stroke.senderId.substring(0, 6)}';
+          break;
+        }
+      }
+      if (authorName != null) break;
+    }
+
+    // 로컬 스트로크에서 찾기
+    if (authorName == null) {
+      for (final stroke in widget.controller.localStrokes.reversed) {
+        for (final p in stroke.points) {
+          if ((p - canvasPoint).distance < hitRadius) {
+            authorName = stroke.senderName ?? '사용자 ${stroke.senderId.substring(0, 6)}';
+            break;
+          }
+        }
+        if (authorName != null) break;
+      }
+    }
+
+    setState(() {
+      _hoveredAuthorName = authorName;
+      _hoveredPosition = authorName != null ? screenPosition : null;
+    });
+
+    // 2초 후 툴팁 숨김
+    if (authorName != null) {
+      Future.delayed(const Duration(seconds: 2), () {
+        if (mounted) {
+          setState(() {
+            _hoveredAuthorName = null;
+            _hoveredPosition = null;
+          });
+        }
+      });
+    }
+  }
+
+  void _clearTooltip() {
+    if (_hoveredAuthorName != null) {
+      setState(() {
+        _hoveredAuthorName = null;
+        _hoveredPosition = null;
+      });
+    }
   }
 
   // 핀치 줌 상태
@@ -121,16 +232,22 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
 
 /// 캔버스 페인터
 class _CanvasPainter extends CustomPainter {
-  final List<StrokeData> strokes;
-  final StrokeData? currentStroke;
+  final List<StrokeModel> serverStrokes;
+  final List<LocalStrokeData> localStrokes;
+  final LocalStrokeData? currentStroke;
+  final List<LocalStrokeData> ghostStrokes;
   final Offset offset;
   final double scale;
+  final String currentUserId;
 
   _CanvasPainter({
-    required this.strokes,
+    required this.serverStrokes,
+    required this.localStrokes,
     this.currentStroke,
+    required this.ghostStrokes,
     required this.offset,
     required this.scale,
+    required this.currentUserId,
   });
 
   @override
@@ -146,17 +263,28 @@ class _CanvasPainter extends CustomPainter {
     canvas.translate(offset.dx, offset.dy);
     canvas.scale(scale);
 
-    // 격자 그리기 (선택적)
+    // 격자 그리기
     _drawGrid(canvas, size);
 
-    // 완료된 스트로크 그리기
-    for (final stroke in strokes) {
-      _drawStroke(canvas, stroke, stroke.isConfirmed ? 1.0 : 0.5);
+    // 서버 스트로크 (확정된 것)
+    for (final stroke in serverStrokes) {
+      _drawServerStroke(canvas, stroke);
+    }
+
+    // 로컬 스트로크 (아직 확정 안 된 것 - 고스트)
+    for (final stroke in localStrokes) {
+      final opacity = stroke.isConfirmed ? 1.0 : 0.6;
+      _drawLocalStroke(canvas, stroke, opacity);
+    }
+
+    // 다른 사용자의 고스트 스트로크
+    for (final stroke in ghostStrokes) {
+      _drawLocalStroke(canvas, stroke, 0.4);
     }
 
     // 현재 그리는 중인 스트로크
     if (currentStroke != null) {
-      _drawStroke(canvas, currentStroke!, 0.7);
+      _drawLocalStroke(canvas, currentStroke!, 0.7);
     }
 
     canvas.restore();
@@ -198,7 +326,42 @@ class _CanvasPainter extends CustomPainter {
     }
   }
 
-  void _drawStroke(Canvas canvas, StrokeData stroke, double opacity) {
+  void _drawServerStroke(Canvas canvas, StrokeModel stroke) {
+    if (stroke.points.isEmpty) return;
+
+    // HEX 색상 파싱
+    final colorHex = stroke.style.color.replaceAll('#', '');
+    final colorValue = int.parse(colorHex, radix: 16);
+    final color = Color(colorValue | 0xFF000000);
+
+    final opacity = stroke.isConfirmed ? 1.0 : 0.6;
+
+    final paint = Paint()
+      ..color = color.withValues(alpha: opacity)
+      ..strokeWidth = stroke.style.width
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round
+      ..style = PaintingStyle.stroke;
+
+    if (stroke.points.length == 1) {
+      canvas.drawCircle(
+        Offset(stroke.points.first.x, stroke.points.first.y),
+        stroke.style.width / 2,
+        paint..style = PaintingStyle.fill,
+      );
+    } else {
+      final path = Path();
+      path.moveTo(stroke.points.first.x, stroke.points.first.y);
+
+      for (int i = 1; i < stroke.points.length; i++) {
+        path.lineTo(stroke.points[i].x, stroke.points[i].y);
+      }
+
+      canvas.drawPath(path, paint);
+    }
+  }
+
+  void _drawLocalStroke(Canvas canvas, LocalStrokeData stroke, double opacity) {
     if (stroke.points.isEmpty) return;
 
     final paint = Paint()
@@ -209,14 +372,12 @@ class _CanvasPainter extends CustomPainter {
       ..style = PaintingStyle.stroke;
 
     if (stroke.points.length == 1) {
-      // 점
       canvas.drawCircle(
         stroke.points.first,
         stroke.strokeWidth / 2,
         paint..style = PaintingStyle.fill,
       );
     } else {
-      // 선
       final path = Path();
       path.moveTo(stroke.points.first.dx, stroke.points.first.dy);
 
@@ -230,6 +391,6 @@ class _CanvasPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _CanvasPainter oldDelegate) {
-    return true; // 항상 다시 그리기 (최적화 필요 시 수정)
+    return true;
   }
 }

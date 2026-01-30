@@ -1,4 +1,7 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
+import '../../models/stroke_model.dart';
+import '../../services/stroke_service.dart';
 
 /// 펜 종류
 enum PenType {
@@ -14,31 +17,66 @@ enum SelectionTool {
   rectangle,
 }
 
-/// 스트로크 데이터
-class StrokeData {
+/// 로컬 스트로크 데이터 (그리는 중)
+class LocalStrokeData {
   final String id;
   final String senderId;
+  final String? senderName;
   final List<Offset> points;
   final Color color;
   final double strokeWidth;
   final PenType penType;
   final DateTime createdAt;
   bool isConfirmed;
+  String? firestoreId; // Firestore에 저장된 ID
 
-  StrokeData({
+  LocalStrokeData({
     required this.id,
     required this.senderId,
+    this.senderName,
     required this.points,
     required this.color,
     required this.strokeWidth,
     required this.penType,
     required this.createdAt,
     this.isConfirmed = false,
+    this.firestoreId,
   });
 }
 
-/// 캔버스 컨트롤러
+/// 사용자별 자동 색상
+class UserAutoColor {
+  static final List<Color> _colors = [
+    const Color(0xFF1E88E5), // 파랑
+    const Color(0xFFE53935), // 빨강
+    const Color(0xFF43A047), // 초록
+    const Color(0xFFFF9800), // 주황
+    const Color(0xFF8E24AA), // 보라
+    const Color(0xFF00ACC1), // 청록
+    const Color(0xFFD81B60), // 핑크
+    const Color(0xFF6D4C41), // 갈색
+  ];
+
+  static final Map<String, Color> _userColors = {};
+
+  static Color getColor(String userId) {
+    if (!_userColors.containsKey(userId)) {
+      final index = _userColors.length % _colors.length;
+      _userColors[userId] = _colors[index];
+    }
+    return _userColors[userId]!;
+  }
+}
+
+/// 캔버스 컨트롤러 (실시간 동기화 포함)
 class CanvasController extends ChangeNotifier {
+  final StrokeService _strokeService = StrokeService();
+  StreamSubscription<List<StrokeModel>>? _strokesSubscription;
+
+  String? _roomId;
+  String? _userId;
+  String? _userName;
+
   // 현재 펜
   PenType _currentPen = PenType.pen1;
   PenType get currentPen => _currentPen;
@@ -50,7 +88,7 @@ class CanvasController extends ChangeNotifier {
   // 펜 슬롯별 색상
   final Map<PenType, Color> _penColors = {
     PenType.pen1: Colors.black,
-    PenType.pen2: const Color(0xFF1E88E5), // 파란색
+    PenType.pen2: const Color(0xFF1E88E5),
     PenType.eraser: Colors.white,
   };
 
@@ -79,17 +117,25 @@ class CanvasController extends ChangeNotifier {
   bool _isAutoColor = false;
   bool get isAutoColor => _isAutoColor;
 
-  // 스트로크 목록
-  final List<StrokeData> _strokes = [];
-  List<StrokeData> get strokes => List.unmodifiable(_strokes);
+  // 로컬 스트로크 (현재 그리는 중인 것만)
+  final List<LocalStrokeData> _localStrokes = [];
+  List<LocalStrokeData> get localStrokes => List.unmodifiable(_localStrokes);
+
+  // 서버 스트로크 (Firestore에서 가져온 것)
+  List<StrokeModel> _serverStrokes = [];
+  List<StrokeModel> get serverStrokes => _serverStrokes;
 
   // 현재 그리는 중인 스트로크
-  StrokeData? _currentStroke;
-  StrokeData? get currentStroke => _currentStroke;
+  LocalStrokeData? _currentStroke;
+  LocalStrokeData? get currentStroke => _currentStroke;
 
-  // Undo/Redo 스택
-  final List<StrokeData> _undoStack = [];
-  final List<StrokeData> _redoStack = [];
+  // 다른 사용자가 그리는 중인 스트로크 (고스트)
+  final Map<String, LocalStrokeData> _ghostStrokes = {};
+  Map<String, LocalStrokeData> get ghostStrokes => Map.unmodifiable(_ghostStrokes);
+
+  // Undo/Redo 스택 (로컬)
+  final List<String> _undoStack = []; // stroke IDs
+  final List<String> _redoStack = [];
 
   bool get canUndo => _undoStack.isNotEmpty;
   bool get canRedo => _redoStack.isNotEmpty;
@@ -101,13 +147,42 @@ class CanvasController extends ChangeNotifier {
   Offset get canvasOffset => _canvasOffset;
   double get canvasScale => _canvasScale;
 
+  // 고스트 라이팅 확정 타이머
+  Timer? _confirmTimer;
+  static const _confirmDelay = Duration(seconds: 2);
+
   // Getters
-  Color get currentColor => _penColors[_currentPen] ?? Colors.black;
+  Color get currentColor {
+    if (_isAutoColor && _userId != null) {
+      return UserAutoColor.getColor(_userId!);
+    }
+    return _penColors[_currentPen] ?? Colors.black;
+  }
+
   double get currentWidth => _penWidths[_currentPen] ?? 2.0;
   List<Color> get colorSlots => List.unmodifiable(_colorSlots);
   List<double> get widthSlots => List.unmodifiable(_widthSlots);
   int get selectedColorIndex => _selectedColorIndex;
   int get selectedWidthIndex => _selectedWidthIndex;
+
+  /// 초기화 (채팅방 연결)
+  void initialize(String roomId, String userId, {String? userName}) {
+    _roomId = roomId;
+    _userId = userId;
+    _userName = userName;
+
+    // 실시간 스트로크 구독
+    _strokesSubscription?.cancel();
+    _strokesSubscription = _strokeService.getStrokesStream(roomId).listen(
+      (strokes) {
+        _serverStrokes = strokes;
+        notifyListeners();
+      },
+      onError: (e) {
+        debugPrint('스트로크 스트림 오류: $e');
+      },
+    );
+  }
 
   /// 펜 선택
   void selectPen(PenType pen) {
@@ -161,16 +236,19 @@ class CanvasController extends ChangeNotifier {
   }
 
   /// 그리기 시작
-  void startStroke(Offset point, String userId) {
+  void startStroke(Offset point) {
+    if (_userId == null || _roomId == null) return;
+
     if (_currentPen == PenType.eraser) {
       _eraseAtPoint(point);
       return;
     }
 
-    final id = '${userId}_${DateTime.now().millisecondsSinceEpoch}';
-    _currentStroke = StrokeData(
+    final id = '${_userId}_${DateTime.now().millisecondsSinceEpoch}';
+    _currentStroke = LocalStrokeData(
       id: id,
-      senderId: userId,
+      senderId: _userId!,
+      senderName: _userName,
       points: [point],
       color: currentColor,
       strokeWidth: currentWidth,
@@ -194,51 +272,134 @@ class CanvasController extends ChangeNotifier {
   }
 
   /// 그리기 끝
-  void endStroke() {
-    if (_currentStroke != null) {
-      _currentStroke!.isConfirmed = true;
-      _strokes.add(_currentStroke!);
-      _undoStack.add(_currentStroke!);
+  Future<void> endStroke() async {
+    if (_currentStroke == null || _roomId == null) return;
+
+    final stroke = _currentStroke!;
+    _currentStroke = null;
+
+    // 최소 2점 이상일 때만 저장
+    if (stroke.points.length < 2) {
+      notifyListeners();
+      return;
+    }
+
+    // 로컬에 추가 (고스트 상태)
+    _localStrokes.add(stroke);
+    notifyListeners();
+
+    // Firestore에 저장
+    try {
+      final points = stroke.points.map((p) {
+        return StrokePoint(
+          x: p.dx,
+          y: p.dy,
+          timestamp: DateTime.now().millisecondsSinceEpoch,
+        );
+      }).toList();
+
+      // Douglas-Peucker 알고리즘으로 압축 (epsilon = 1.0)
+      final simplifiedPoints = StrokeService.simplifyPoints(points, 1.0);
+
+      final strokeModel = StrokeModel(
+        id: stroke.id,
+        roomId: _roomId!,
+        senderId: stroke.senderId,
+        points: simplifiedPoints,
+        style: PenStyle(
+          color: '#${stroke.color.toARGB32().toRadixString(16).padLeft(8, '0').substring(2)}',
+          width: stroke.strokeWidth,
+          penType: stroke.penType.name,
+        ),
+        createdAt: stroke.createdAt,
+        isConfirmed: false,
+      );
+
+      final firestoreId = await _strokeService.saveStroke(strokeModel);
+      stroke.firestoreId = firestoreId;
+
+      // 2초 후 확정
+      _confirmTimer?.cancel();
+      _confirmTimer = Timer(_confirmDelay, () {
+        _confirmStroke(stroke);
+      });
+
+      _undoStack.add(firestoreId);
       _redoStack.clear();
-      _currentStroke = null;
+    } catch (e) {
+      debugPrint('스트로크 저장 오류: $e');
+      // 로컬에서 제거
+      _localStrokes.remove(stroke);
       notifyListeners();
     }
   }
 
+  /// 스트로크 확정 (고스트 → 실선)
+  Future<void> _confirmStroke(LocalStrokeData stroke) async {
+    if (stroke.firestoreId == null || _roomId == null) return;
+
+    stroke.isConfirmed = true;
+    await _strokeService.confirmStroke(_roomId!, stroke.firestoreId!);
+
+    // 로컬에서 제거 (서버에서 가져올 것이므로)
+    _localStrokes.remove(stroke);
+    notifyListeners();
+  }
+
   /// 지우기 (포인트)
-  void _eraseAtPoint(Offset point) {
+  Future<void> _eraseAtPoint(Offset point) async {
+    if (_roomId == null) return;
+
     final eraserRadius = _penWidths[PenType.eraser]! / 2;
-    
-    _strokes.removeWhere((stroke) {
+    final strokesToDelete = <String>[];
+
+    // 서버 스트로크에서 찾기
+    for (final stroke in _serverStrokes) {
       for (final p in stroke.points) {
-        if ((p - point).distance < eraserRadius) {
-          _undoStack.add(stroke);
-          return true;
+        final offset = Offset(p.x, p.y);
+        if ((offset - point).distance < eraserRadius) {
+          strokesToDelete.add(stroke.id);
+          break;
         }
       }
-      return false;
-    });
+    }
+
+    // 로컬 스트로크에서 찾기
+    final localToRemove = <LocalStrokeData>[];
+    for (final stroke in _localStrokes) {
+      for (final p in stroke.points) {
+        if ((p - point).distance < eraserRadius) {
+          if (stroke.firestoreId != null) {
+            strokesToDelete.add(stroke.firestoreId!);
+          }
+          localToRemove.add(stroke);
+          break;
+        }
+      }
+    }
+
+    // 삭제
+    if (strokesToDelete.isNotEmpty) {
+      await _strokeService.deleteStrokes(_roomId!, strokesToDelete);
+    }
+    _localStrokes.removeWhere((s) => localToRemove.contains(s));
     notifyListeners();
   }
 
   /// Undo
-  void undo() {
-    if (_undoStack.isNotEmpty) {
-      final stroke = _undoStack.removeLast();
-      _strokes.remove(stroke);
-      _redoStack.add(stroke);
-      notifyListeners();
-    }
+  Future<void> undo() async {
+    if (_undoStack.isEmpty || _roomId == null) return;
+
+    final strokeId = _undoStack.removeLast();
+    await _strokeService.deleteStroke(_roomId!, strokeId);
+    _redoStack.add(strokeId);
+    notifyListeners();
   }
 
-  /// Redo
+  /// Redo (제한적 - 서버에서 복구 불가)
   void redo() {
-    if (_redoStack.isNotEmpty) {
-      final stroke = _redoStack.removeLast();
-      _strokes.add(stroke);
-      _undoStack.add(stroke);
-      notifyListeners();
-    }
+    // Firestore에서 소프트 삭제된 것을 복구하려면 추가 로직 필요
+    // 현재는 미구현
   }
 
   /// 캔버스 이동
@@ -250,12 +411,11 @@ class CanvasController extends ChangeNotifier {
   /// 캔버스 확대/축소
   void zoom(double scale, Offset focalPoint) {
     final newScale = (_canvasScale * scale).clamp(0.1, 5.0);
-    
-    // 줌 중심점 유지
+
     final focalPointDelta = focalPoint - _canvasOffset;
     _canvasOffset = focalPoint - focalPointDelta * (newScale / _canvasScale);
     _canvasScale = newScale;
-    
+
     notifyListeners();
   }
 
@@ -266,11 +426,15 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 전체 지우기
-  void clearAll() {
-    _undoStack.addAll(_strokes);
-    _strokes.clear();
-    _redoStack.clear();
-    notifyListeners();
+  /// 작성자 색상 가져오기
+  Color getAuthorColor(String senderId) {
+    return UserAutoColor.getColor(senderId);
+  }
+
+  @override
+  void dispose() {
+    _strokesSubscription?.cancel();
+    _confirmTimer?.cancel();
+    super.dispose();
   }
 }
