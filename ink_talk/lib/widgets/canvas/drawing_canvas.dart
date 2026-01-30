@@ -91,26 +91,16 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     _currentInputKind = event.kind;
     _clearTooltip();
 
-    // 스타일러스는 항상 그리기
+    // 패드에서 손가락은 이동/선택, 펜은 그리기
     final isStylus = event.kind == PointerDeviceKind.stylus ||
         event.kind == PointerDeviceKind.invertedStylus;
 
-    if (isStylus) {
-      final localPoint = _transformPoint(event.localPosition);
-      widget.controller.startStroke(localPoint);
-      return;
-    }
-
-    // 마우스/터치는 테스트 모드에 따라 결정
-    final isMouseOrTouch = event.kind == PointerDeviceKind.mouse || 
-        event.kind == PointerDeviceKind.touch;
-    
-    if (isMouseOrTouch && widget.controller.testDrawMode) {
-      // 테스트 그리기 모드: 마우스/터치로 그리기
+    if (isStylus || event.kind == PointerDeviceKind.mouse) {
+      // 펜 또는 마우스: 그리기
       final localPoint = _transformPoint(event.localPosition);
       widget.controller.startStroke(localPoint);
     }
-    // testDrawMode가 false면 제스처 디텍터가 이동 처리
+    // 터치는 제스처 디텍터가 이동 처리
   }
 
   void _onPointerMove(PointerMoveEvent event) {
@@ -119,16 +109,7 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     final isStylus = _currentInputKind == PointerDeviceKind.stylus ||
         _currentInputKind == PointerDeviceKind.invertedStylus;
 
-    if (isStylus) {
-      final localPoint = _transformPoint(event.localPosition);
-      widget.controller.updateStroke(localPoint);
-      return;
-    }
-
-    final isMouseOrTouch = _currentInputKind == PointerDeviceKind.mouse || 
-        _currentInputKind == PointerDeviceKind.touch;
-
-    if (isMouseOrTouch && widget.controller.testDrawMode) {
+    if (isStylus || _currentInputKind == PointerDeviceKind.mouse) {
       final localPoint = _transformPoint(event.localPosition);
       widget.controller.updateStroke(localPoint);
     }
@@ -138,15 +119,8 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     final isStylus = _currentInputKind == PointerDeviceKind.stylus ||
         _currentInputKind == PointerDeviceKind.invertedStylus;
 
-    if (isStylus) {
+    if (isStylus || _currentInputKind == PointerDeviceKind.mouse) {
       widget.controller.endStroke();
-    } else {
-      final isMouseOrTouch = _currentInputKind == PointerDeviceKind.mouse || 
-          _currentInputKind == PointerDeviceKind.touch;
-
-      if (isMouseOrTouch && widget.controller.testDrawMode) {
-        widget.controller.endStroke();
-      }
     }
 
     _currentInputKind = null;
@@ -234,16 +208,11 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
   }
 
   void _onScaleUpdate(ScaleUpdateDetails details) {
-    // 테스트 그리기 모드에서는 한 손가락 이동 비활성화 (그리기와 충돌 방지)
-    final testDrawMode = widget.controller.testDrawMode;
-
     if (details.pointerCount == 1) {
-      // 한 손가락: 이동 (테스트 이동 모드일 때만)
-      if (!testDrawMode) {
-        widget.controller.pan(details.focalPointDelta);
-      }
+      // 한 손가락: 이동
+      widget.controller.pan(details.focalPointDelta);
     } else if (details.pointerCount == 2) {
-      // 두 손가락: 줌 (항상 작동)
+      // 두 손가락: 줌
       widget.controller.zoom(
         details.scale / _baseScale * widget.controller.canvasScale / widget.controller.canvasScale,
         details.localFocalPoint,
