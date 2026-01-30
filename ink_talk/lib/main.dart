@@ -5,6 +5,7 @@ import 'firebase_options.dart';
 import 'core/theme/app_theme.dart';
 import 'providers/auth_provider.dart';
 import 'providers/friend_provider.dart';
+import 'providers/room_provider.dart';
 import 'router/app_router.dart';
 
 void main() async {
@@ -27,6 +28,8 @@ class InkApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => AuthProvider()),
         // 친구 Provider
         ChangeNotifierProvider(create: (_) => FriendProvider()),
+        // 채팅방 Provider
+        ChangeNotifierProvider(create: (_) => RoomProvider()),
       ],
       child: const _AppWithRouter(),
     );
