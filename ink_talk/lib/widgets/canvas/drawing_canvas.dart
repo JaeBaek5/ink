@@ -117,9 +117,9 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
                 ),
               ),
 
-            // 시간순 네비게이션 바 (좌측)
+            // 시간순 네비게이션 바 (우측)
             Positioned(
-              left: 8,
+              right: 8,
               top: 60,
               bottom: 100,
               child: LayoutBuilder(
@@ -138,9 +138,9 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
               ),
             ),
 
-            // 이벤트 이동 화살표 (좌측 하단)
+            // 이벤트 이동 화살표 (우측 하단)
             Positioned(
-              left: 8,
+              right: 8,
               bottom: 16,
               child: _buildEventNavigationButtons(),
             ),
