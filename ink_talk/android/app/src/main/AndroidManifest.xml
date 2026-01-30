@@ -1,4 +1,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 연락처 읽기 권한 -->
+    <uses-permission android:name="android.permission.READ_CONTACTS"/>
+    
     <application
         android:label="ink_app"
         android:name="${applicationName}"

@@ -5,6 +5,7 @@ import '../../../models/friend_model.dart';
 import '../../../models/user_model.dart';
 import '../../../providers/auth_provider.dart';
 import '../../../providers/friend_provider.dart';
+import '../../friends/contact_sync_screen.dart';
 
 /// 친구 탭
 class FriendsTab extends StatefulWidget {
@@ -277,6 +278,21 @@ class _FriendsTabState extends State<FriendsTab> {
                 onTap: () {
                   Navigator.pop(context);
                   _showAddByPhoneDialog(context);
+                },
+              ),
+              const Divider(),
+              ListTile(
+                leading: const Icon(Icons.contacts, color: AppColors.gold),
+                title: const Text('연락처에서 찾기'),
+                subtitle: const Text('연락처에서 INK 사용자를 찾습니다'),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const ContactSyncScreen(),
+                    ),
+                  );
                 },
               ),
               const SizedBox(height: 16),

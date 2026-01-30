@@ -5,6 +5,7 @@ class UserModel {
   final String uid;
   final String visibleId;
   final String? email;
+  final String? phoneNumber;
   final String? displayName;
   final String? photoUrl;
   final String? statusMessage;
@@ -15,6 +16,7 @@ class UserModel {
     required this.uid,
     required this.visibleId,
     this.email,
+    this.phoneNumber,
     this.displayName,
     this.photoUrl,
     this.statusMessage,
@@ -29,6 +31,7 @@ class UserModel {
       uid: doc.id,
       visibleId: data['visibleId'] ?? '',
       email: data['email'],
+      phoneNumber: data['phoneNumber'],
       displayName: data['displayName'],
       photoUrl: data['photoUrl'],
       statusMessage: data['statusMessage'],
@@ -42,6 +45,7 @@ class UserModel {
     return {
       'visibleId': visibleId,
       'email': email,
+      'phoneNumber': phoneNumber,
       'displayName': displayName,
       'photoUrl': photoUrl,
       'statusMessage': statusMessage,
@@ -54,6 +58,7 @@ class UserModel {
   UserModel copyWith({
     String? visibleId,
     String? email,
+    String? phoneNumber,
     String? displayName,
     String? photoUrl,
     String? statusMessage,
@@ -63,6 +68,7 @@ class UserModel {
       uid: uid,
       visibleId: visibleId ?? this.visibleId,
       email: email ?? this.email,
+      phoneNumber: phoneNumber ?? this.phoneNumber,
       displayName: displayName ?? this.displayName,
       photoUrl: photoUrl ?? this.photoUrl,
       statusMessage: statusMessage ?? this.statusMessage,

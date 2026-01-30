@@ -45,5 +45,7 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSContactsUsageDescription</key>
+	<string>친구 추천을 위해 연락처에 접근합니다. 연락처 정보는 INK 가입자 확인에만 사용됩니다.</string>
 </dict>
 </plist>
