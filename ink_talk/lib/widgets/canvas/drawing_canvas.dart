@@ -234,11 +234,16 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
   }
 
   void _onScaleUpdate(ScaleUpdateDetails details) {
+    // 테스트 그리기 모드에서는 한 손가락 이동 비활성화 (그리기와 충돌 방지)
+    final testDrawMode = widget.controller.testDrawMode;
+
     if (details.pointerCount == 1) {
-      // 한 손가락: 이동
-      widget.controller.pan(details.focalPointDelta);
+      // 한 손가락: 이동 (테스트 이동 모드일 때만)
+      if (!testDrawMode) {
+        widget.controller.pan(details.focalPointDelta);
+      }
     } else if (details.pointerCount == 2) {
-      // 두 손가락: 줌
+      // 두 손가락: 줌 (항상 작동)
       widget.controller.zoom(
         details.scale / _baseScale * widget.controller.canvasScale / widget.controller.canvasScale,
         details.localFocalPoint,
