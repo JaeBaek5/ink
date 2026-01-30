@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../core/constants/app_colors.dart';
+import '../../models/shape_model.dart';
 import '../../screens/canvas/canvas_controller.dart';
 
 /// 펜 툴바 (상단 중앙)
@@ -385,23 +386,71 @@ class PenToolbar extends StatelessWidget {
 
   /// 도형 선택
   Widget _buildShapeButton() {
-    return Tooltip(
-      message: '도형',
-      child: InkWell(
-        onTap: () {
-          // TODO: 도형 선택 메뉴
-        },
-        borderRadius: BorderRadius.circular(8),
-        child: Container(
-          padding: const EdgeInsets.all(8),
-          child: const Icon(
-            Icons.category_outlined,
-            size: 20,
-            color: AppColors.ink,
-          ),
+    final isShapeMode = controller.inputMode == InputMode.shape;
+    
+    return PopupMenuButton<ShapeType>(
+      tooltip: '도형',
+      onSelected: (type) {
+        controller.selectShapeType(type);
+      },
+      offset: const Offset(0, 40),
+      itemBuilder: (context) => [
+        _buildShapeMenuItem(ShapeType.line, Icons.horizontal_rule, '선'),
+        _buildShapeMenuItem(ShapeType.arrow, Icons.arrow_forward, '화살표'),
+        _buildShapeMenuItem(ShapeType.rectangle, Icons.crop_square, '사각형'),
+        _buildShapeMenuItem(ShapeType.ellipse, Icons.circle_outlined, '원/타원'),
+      ],
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: isShapeMode ? AppColors.gold.withValues(alpha: 0.2) : null,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              _getShapeIcon(controller.currentShapeType),
+              size: 20,
+              color: isShapeMode ? AppColors.gold : AppColors.ink,
+            ),
+            const SizedBox(width: 2),
+            Icon(
+              Icons.arrow_drop_down,
+              size: 16,
+              color: isShapeMode ? AppColors.gold : AppColors.mutedGray,
+            ),
+          ],
         ),
       ),
     );
+  }
+
+  PopupMenuItem<ShapeType> _buildShapeMenuItem(ShapeType type, IconData icon, String label) {
+    final isSelected = controller.currentShapeType == type;
+    return PopupMenuItem<ShapeType>(
+      value: type,
+      child: Row(
+        children: [
+          Icon(icon, size: 20, color: isSelected ? AppColors.gold : AppColors.ink),
+          const SizedBox(width: 12),
+          Text(label, style: TextStyle(color: isSelected ? AppColors.gold : AppColors.ink)),
+        ],
+      ),
+    );
+  }
+
+  IconData _getShapeIcon(ShapeType type) {
+    switch (type) {
+      case ShapeType.line:
+        return Icons.horizontal_rule;
+      case ShapeType.arrow:
+        return Icons.arrow_forward;
+      case ShapeType.rectangle:
+        return Icons.crop_square;
+      case ShapeType.ellipse:
+        return Icons.circle_outlined;
+    }
   }
 
   /// 텍스트 버튼

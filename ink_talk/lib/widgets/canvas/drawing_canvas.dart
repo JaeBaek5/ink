@@ -1,7 +1,9 @@
+import 'dart:math' as math;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import '../../core/constants/app_colors.dart';
 import '../../models/message_model.dart';
+import '../../models/shape_model.dart';
 import '../../models/stroke_model.dart';
 import '../../screens/canvas/canvas_controller.dart';
 
@@ -54,9 +56,20 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
                   localStrokes: widget.controller.localStrokes,
                   currentStroke: widget.controller.currentStroke,
                   ghostStrokes: widget.controller.ghostStrokes.values.toList(),
+                  serverShapes: widget.controller.serverShapes,
+                  currentShapeStart: widget.controller.shapeStartPoint,
+                  currentShapeEnd: widget.controller.shapeEndPoint,
+                  currentShapeType: widget.controller.currentShapeType,
+                  shapeStrokeColor: widget.controller.shapeStrokeColor,
+                  shapeStrokeWidth: widget.controller.shapeStrokeWidth,
+                  shapeFillColor: widget.controller.shapeFillColor,
+                  shapeLineStyle: widget.controller.shapeLineStyle,
+                  selectedShape: widget.controller.selectedShape,
                   offset: widget.controller.canvasOffset,
                   scale: widget.controller.canvasScale,
                   currentUserId: widget.userId,
+                  snapEnabled: widget.controller.snapEnabled,
+                  gridSize: CanvasController.gridSize,
                 ),
                 size: Size.infinite,
               ),
@@ -164,16 +177,21 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     _currentInputKind = event.kind;
     _clearTooltip();
 
-    // 패드에서 손가락은 이동/선택, 펜은 그리기
     final isStylus = event.kind == PointerDeviceKind.stylus ||
         event.kind == PointerDeviceKind.invertedStylus;
 
     if (isStylus || event.kind == PointerDeviceKind.mouse) {
-      // 펜 또는 마우스: 그리기
       final localPoint = _transformPoint(event.localPosition);
+      
+      // 도형 모드
+      if (widget.controller.inputMode == InputMode.shape) {
+        widget.controller.startShape(localPoint);
+        return;
+      }
+      
+      // 펜 모드
       widget.controller.startStroke(localPoint);
     }
-    // 터치는 제스처 디텍터가 이동 처리
   }
 
   void _onPointerMove(PointerMoveEvent event) {
@@ -184,6 +202,13 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
 
     if (isStylus || _currentInputKind == PointerDeviceKind.mouse) {
       final localPoint = _transformPoint(event.localPosition);
+      
+      // 도형 모드
+      if (widget.controller.inputMode == InputMode.shape) {
+        widget.controller.updateShape(localPoint);
+        return;
+      }
+      
       widget.controller.updateStroke(localPoint);
     }
   }
@@ -193,6 +218,13 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
         _currentInputKind == PointerDeviceKind.invertedStylus;
 
     if (isStylus || _currentInputKind == PointerDeviceKind.mouse) {
+      // 도형 모드
+      if (widget.controller.inputMode == InputMode.shape) {
+        widget.controller.endShape();
+        _currentInputKind = null;
+        return;
+      }
+      
       widget.controller.endStroke();
     }
 
@@ -367,18 +399,40 @@ class _CanvasPainter extends CustomPainter {
   final List<LocalStrokeData> localStrokes;
   final LocalStrokeData? currentStroke;
   final List<LocalStrokeData> ghostStrokes;
+  final List<ShapeModel> serverShapes;
+  final Offset? currentShapeStart;
+  final Offset? currentShapeEnd;
+  final ShapeType currentShapeType;
+  final String shapeStrokeColor;
+  final double shapeStrokeWidth;
+  final String? shapeFillColor;
+  final LineStyle shapeLineStyle;
+  final ShapeModel? selectedShape;
   final Offset offset;
   final double scale;
   final String currentUserId;
+  final bool snapEnabled;
+  final double gridSize;
 
   _CanvasPainter({
     required this.serverStrokes,
     required this.localStrokes,
     this.currentStroke,
     required this.ghostStrokes,
+    required this.serverShapes,
+    this.currentShapeStart,
+    this.currentShapeEnd,
+    required this.currentShapeType,
+    required this.shapeStrokeColor,
+    required this.shapeStrokeWidth,
+    this.shapeFillColor,
+    required this.shapeLineStyle,
+    this.selectedShape,
     required this.offset,
     required this.scale,
     required this.currentUserId,
+    required this.snapEnabled,
+    required this.gridSize,
   });
 
   @override
@@ -396,6 +450,16 @@ class _CanvasPainter extends CustomPainter {
 
     // 격자 그리기
     _drawGrid(canvas, size);
+
+    // 서버 도형
+    for (final shape in serverShapes) {
+      _drawShape(canvas, shape, shape == selectedShape);
+    }
+
+    // 현재 그리는 중인 도형
+    if (currentShapeStart != null && currentShapeEnd != null) {
+      _drawCurrentShape(canvas);
+    }
 
     // 서버 스트로크 (확정된 것)
     for (final stroke in serverStrokes) {
@@ -419,6 +483,144 @@ class _CanvasPainter extends CustomPainter {
     }
 
     canvas.restore();
+  }
+
+  void _drawShape(Canvas canvas, ShapeModel shape, bool isSelected) {
+    final strokeColor = _parseColor(shape.strokeColor);
+    final fillColor = shape.fillColor != null ? _parseColor(shape.fillColor!) : null;
+
+    final strokePaint = Paint()
+      ..color = strokeColor
+      ..strokeWidth = shape.strokeWidth
+      ..style = PaintingStyle.stroke;
+
+    // 선 스타일
+    if (shape.lineStyle == LineStyle.dashed) {
+      strokePaint.strokeWidth = shape.strokeWidth;
+    }
+
+    final fillPaint = fillColor != null
+        ? (Paint()
+          ..color = fillColor.withValues(alpha: shape.fillOpacity)
+          ..style = PaintingStyle.fill)
+        : null;
+
+    final start = Offset(shape.startX, shape.startY);
+    final end = Offset(shape.endX, shape.endY);
+
+    switch (shape.type) {
+      case ShapeType.line:
+        canvas.drawLine(start, end, strokePaint);
+        break;
+      case ShapeType.arrow:
+        _drawArrow(canvas, start, end, strokePaint);
+        break;
+      case ShapeType.rectangle:
+        final rect = Rect.fromPoints(start, end);
+        if (fillPaint != null) canvas.drawRect(rect, fillPaint);
+        canvas.drawRect(rect, strokePaint);
+        break;
+      case ShapeType.ellipse:
+        final rect = Rect.fromPoints(start, end);
+        if (fillPaint != null) canvas.drawOval(rect, fillPaint);
+        canvas.drawOval(rect, strokePaint);
+        break;
+    }
+
+    // 선택된 도형 표시
+    if (isSelected) {
+      final selectionPaint = Paint()
+        ..color = AppColors.gold
+        ..strokeWidth = 2
+        ..style = PaintingStyle.stroke;
+      final rect = Rect.fromPoints(start, end).inflate(5);
+      canvas.drawRect(rect, selectionPaint);
+
+      // 핸들
+      _drawHandle(canvas, rect.topLeft);
+      _drawHandle(canvas, rect.topRight);
+      _drawHandle(canvas, rect.bottomLeft);
+      _drawHandle(canvas, rect.bottomRight);
+    }
+  }
+
+  void _drawCurrentShape(Canvas canvas) {
+    final strokeColor = _parseColor(shapeStrokeColor);
+    final fillColor = shapeFillColor != null ? _parseColor(shapeFillColor!) : null;
+
+    final strokePaint = Paint()
+      ..color = strokeColor.withValues(alpha: 0.7)
+      ..strokeWidth = shapeStrokeWidth
+      ..style = PaintingStyle.stroke;
+
+    final fillPaint = fillColor != null
+        ? (Paint()
+          ..color = fillColor.withValues(alpha: 0.3)
+          ..style = PaintingStyle.fill)
+        : null;
+
+    final start = currentShapeStart!;
+    final end = currentShapeEnd!;
+
+    switch (currentShapeType) {
+      case ShapeType.line:
+        canvas.drawLine(start, end, strokePaint);
+        break;
+      case ShapeType.arrow:
+        _drawArrow(canvas, start, end, strokePaint);
+        break;
+      case ShapeType.rectangle:
+        final rect = Rect.fromPoints(start, end);
+        if (fillPaint != null) canvas.drawRect(rect, fillPaint);
+        canvas.drawRect(rect, strokePaint);
+        break;
+      case ShapeType.ellipse:
+        final rect = Rect.fromPoints(start, end);
+        if (fillPaint != null) canvas.drawOval(rect, fillPaint);
+        canvas.drawOval(rect, strokePaint);
+        break;
+    }
+  }
+
+  void _drawArrow(Canvas canvas, Offset start, Offset end, Paint paint) {
+    canvas.drawLine(start, end, paint);
+
+    // 화살표 머리
+    final angle = math.atan2(end.dy - start.dy, end.dx - start.dx);
+    const arrowSize = 15.0;
+    const arrowAngle = math.pi / 6;
+
+    final path = Path();
+    path.moveTo(end.dx, end.dy);
+    path.lineTo(
+      end.dx - arrowSize * math.cos(angle - arrowAngle),
+      end.dy - arrowSize * math.sin(angle - arrowAngle),
+    );
+    path.moveTo(end.dx, end.dy);
+    path.lineTo(
+      end.dx - arrowSize * math.cos(angle + arrowAngle),
+      end.dy - arrowSize * math.sin(angle + arrowAngle),
+    );
+    canvas.drawPath(path, paint);
+  }
+
+  void _drawHandle(Canvas canvas, Offset position) {
+    final paint = Paint()
+      ..color = AppColors.gold
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(position, 6, paint);
+    
+    final borderPaint = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2;
+    canvas.drawCircle(position, 6, borderPaint);
+  }
+
+  Color _parseColor(String hex) {
+    final colorHex = hex.replaceAll('#', '');
+    final colorValue = int.parse(colorHex, radix: 16);
+    return Color(colorValue | 0xFF000000);
   }
 
   void _drawGrid(Canvas canvas, Size size) {

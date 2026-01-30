@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import '../../models/message_model.dart';
+import '../../models/shape_model.dart';
 import '../../models/stroke_model.dart';
+import '../../services/shape_service.dart';
 import '../../services/stroke_service.dart';
 import '../../services/text_service.dart';
 
@@ -75,14 +77,17 @@ enum InputMode {
   pen,       // 펜 그리기
   text,      // 텍스트 입력
   quickText, // 빠른 텍스트
+  shape,     // 도형 그리기
 }
 
 /// 캔버스 컨트롤러 (실시간 동기화 포함)
 class CanvasController extends ChangeNotifier {
   final StrokeService _strokeService = StrokeService();
   final TextService _textService = TextService();
+  final ShapeService _shapeService = ShapeService();
   StreamSubscription<List<StrokeModel>>? _strokesSubscription;
   StreamSubscription<List<MessageModel>>? _textsSubscription;
+  StreamSubscription<List<ShapeModel>>? _shapesSubscription;
 
   String? _roomId;
   String? _userId;
@@ -98,6 +103,42 @@ class CanvasController extends ChangeNotifier {
 
   // 빠른 텍스트 마지막 위치
   Offset? _lastTextPosition;
+
+  // 도형 목록 (서버)
+  List<ShapeModel> _serverShapes = [];
+  List<ShapeModel> get serverShapes => _serverShapes;
+
+  // 현재 그리는 도형
+  ShapeType _currentShapeType = ShapeType.rectangle;
+  ShapeType get currentShapeType => _currentShapeType;
+
+  // 도형 그리기 중인 데이터
+  Offset? _shapeStartPoint;
+  Offset? _shapeEndPoint;
+  Offset? get shapeStartPoint => _shapeStartPoint;
+  Offset? get shapeEndPoint => _shapeEndPoint;
+
+  // 도형 스타일
+  String _shapeStrokeColor = '#000000';
+  double _shapeStrokeWidth = 2.0;
+  String? _shapeFillColor;
+  double _shapeFillOpacity = 1.0;
+  LineStyle _shapeLineStyle = LineStyle.solid;
+
+  String get shapeStrokeColor => _shapeStrokeColor;
+  double get shapeStrokeWidth => _shapeStrokeWidth;
+  String? get shapeFillColor => _shapeFillColor;
+  double get shapeFillOpacity => _shapeFillOpacity;
+  LineStyle get shapeLineStyle => _shapeLineStyle;
+
+  // 선택된 도형
+  ShapeModel? _selectedShape;
+  ShapeModel? get selectedShape => _selectedShape;
+
+  // 스냅/격자
+  bool _snapEnabled = true;
+  bool get snapEnabled => _snapEnabled;
+  static const double gridSize = 25.0;
 
   // 현재 펜
   PenType _currentPen = PenType.pen1;
@@ -216,11 +257,24 @@ class CanvasController extends ChangeNotifier {
         debugPrint('텍스트 스트림 오류: $e');
       },
     );
+
+    // 실시간 도형 구독
+    _shapesSubscription?.cancel();
+    _shapesSubscription = _shapeService.getShapesStream(roomId).listen(
+      (shapes) {
+        _serverShapes = shapes;
+        notifyListeners();
+      },
+      onError: (e) {
+        debugPrint('도형 스트림 오류: $e');
+      },
+    );
   }
 
   /// 입력 모드 변경
   void setInputMode(InputMode mode) {
     _inputMode = mode;
+    _selectedShape = null;
     notifyListeners();
   }
 
@@ -261,6 +315,158 @@ class CanvasController extends ChangeNotifier {
   Future<void> deleteText(String textId) async {
     if (_roomId == null) return;
     await _textService.deleteText(_roomId!, textId);
+  }
+
+  // ===== 도형 관련 =====
+
+  /// 도형 타입 선택
+  void selectShapeType(ShapeType type) {
+    _currentShapeType = type;
+    _inputMode = InputMode.shape;
+    notifyListeners();
+  }
+
+  /// 도형 스타일 설정
+  void setShapeStyle({
+    String? strokeColor,
+    double? strokeWidth,
+    String? fillColor,
+    double? fillOpacity,
+    LineStyle? lineStyle,
+  }) {
+    if (strokeColor != null) _shapeStrokeColor = strokeColor;
+    if (strokeWidth != null) _shapeStrokeWidth = strokeWidth;
+    if (fillColor != null) _shapeFillColor = fillColor;
+    if (fillOpacity != null) _shapeFillOpacity = fillOpacity;
+    if (lineStyle != null) _shapeLineStyle = lineStyle;
+    notifyListeners();
+  }
+
+  /// 도형 그리기 시작
+  void startShape(Offset point) {
+    if (_inputMode != InputMode.shape) return;
+    _shapeStartPoint = _snapToGrid(point);
+    _shapeEndPoint = _shapeStartPoint;
+    notifyListeners();
+  }
+
+  /// 도형 그리기 중
+  void updateShape(Offset point) {
+    if (_shapeStartPoint == null) return;
+    _shapeEndPoint = _snapToGrid(point);
+    notifyListeners();
+  }
+
+  /// 도형 그리기 끝
+  Future<void> endShape() async {
+    if (_shapeStartPoint == null || _shapeEndPoint == null || _roomId == null || _userId == null) {
+      _shapeStartPoint = null;
+      _shapeEndPoint = null;
+      notifyListeners();
+      return;
+    }
+
+    // 최소 크기 체크
+    final dx = (_shapeEndPoint!.dx - _shapeStartPoint!.dx).abs();
+    final dy = (_shapeEndPoint!.dy - _shapeStartPoint!.dy).abs();
+    if (dx < 5 && dy < 5) {
+      _shapeStartPoint = null;
+      _shapeEndPoint = null;
+      notifyListeners();
+      return;
+    }
+
+    final shape = ShapeModel(
+      id: '',
+      roomId: _roomId!,
+      senderId: _userId!,
+      type: _currentShapeType,
+      startX: _shapeStartPoint!.dx,
+      startY: _shapeStartPoint!.dy,
+      endX: _shapeEndPoint!.dx,
+      endY: _shapeEndPoint!.dy,
+      strokeColor: _shapeStrokeColor,
+      strokeWidth: _shapeStrokeWidth,
+      fillColor: _shapeFillColor,
+      fillOpacity: _shapeFillOpacity,
+      lineStyle: _shapeLineStyle,
+      zIndex: _serverShapes.isEmpty ? 0 : _serverShapes.map((s) => s.zIndex).reduce((a, b) => a > b ? a : b) + 1,
+      createdAt: DateTime.now(),
+    );
+
+    try {
+      await _shapeService.saveShape(shape);
+    } catch (e) {
+      debugPrint('도형 저장 오류: $e');
+    }
+
+    _shapeStartPoint = null;
+    _shapeEndPoint = null;
+    notifyListeners();
+  }
+
+  /// 스냅 토글
+  void toggleSnap() {
+    _snapEnabled = !_snapEnabled;
+    notifyListeners();
+  }
+
+  /// 격자에 스냅
+  Offset _snapToGrid(Offset point) {
+    if (!_snapEnabled) return point;
+    return Offset(
+      (point.dx / gridSize).round() * gridSize,
+      (point.dy / gridSize).round() * gridSize,
+    );
+  }
+
+  /// 도형 선택
+  void selectShape(ShapeModel? shape) {
+    _selectedShape = shape;
+    notifyListeners();
+  }
+
+  /// 선택된 도형 이동
+  Future<void> moveSelectedShape(Offset delta) async {
+    if (_selectedShape == null || _roomId == null || _selectedShape!.isLocked) return;
+
+    await _shapeService.updateShape(
+      _roomId!,
+      _selectedShape!.id,
+      startX: _selectedShape!.startX + delta.dx,
+      startY: _selectedShape!.startY + delta.dy,
+      endX: _selectedShape!.endX + delta.dx,
+      endY: _selectedShape!.endY + delta.dy,
+    );
+  }
+
+  /// 도형 삭제
+  Future<void> deleteShape(String shapeId) async {
+    if (_roomId == null) return;
+    await _shapeService.deleteShape(_roomId!, shapeId);
+    if (_selectedShape?.id == shapeId) {
+      _selectedShape = null;
+      notifyListeners();
+    }
+  }
+
+  /// 도형 잠금 토글
+  Future<void> toggleShapeLock(String shapeId, bool isLocked) async {
+    if (_roomId == null) return;
+    await _shapeService.updateShape(_roomId!, shapeId, isLocked: isLocked);
+  }
+
+  /// 도형 앞으로
+  Future<void> bringShapeToFront(String shapeId) async {
+    if (_roomId == null) return;
+    final maxZ = _serverShapes.isEmpty ? 0 : _serverShapes.map((s) => s.zIndex).reduce((a, b) => a > b ? a : b);
+    await _shapeService.bringToFront(_roomId!, shapeId, maxZ);
+  }
+
+  /// 도형 뒤로
+  Future<void> sendShapeToBack(String shapeId) async {
+    if (_roomId == null) return;
+    await _shapeService.sendToBack(_roomId!, shapeId);
   }
 
   /// 펜 선택
@@ -514,6 +720,7 @@ class CanvasController extends ChangeNotifier {
   void dispose() {
     _strokesSubscription?.cancel();
     _textsSubscription?.cancel();
+    _shapesSubscription?.cancel();
     _confirmTimer?.cancel();
     super.dispose();
   }
