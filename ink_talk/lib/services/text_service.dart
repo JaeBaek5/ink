@@ -14,11 +14,15 @@ class TextService {
   /// 텍스트 실시간 스트림
   Stream<List<MessageModel>> getTextsStream(String roomId) {
     return _textsCollection(roomId)
-        .where('isDeleted', isEqualTo: false)
-        .orderBy('createdAt', descending: false)
         .snapshots()
         .map((snapshot) {
-      return snapshot.docs.map((doc) => MessageModel.fromFirestore(doc)).toList();
+      final texts = snapshot.docs
+          .map((doc) => MessageModel.fromFirestore(doc))
+          .where((text) => !text.isDeleted)
+          .toList();
+      // 시간순 정렬 (클라이언트)
+      texts.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      return texts;
     });
   }
 

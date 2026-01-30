@@ -14,11 +14,15 @@ class ShapeService {
   /// 도형 실시간 스트림
   Stream<List<ShapeModel>> getShapesStream(String roomId) {
     return _shapesCollection(roomId)
-        .where('isDeleted', isEqualTo: false)
-        .orderBy('zIndex', descending: false)
         .snapshots()
         .map((snapshot) {
-      return snapshot.docs.map((doc) => ShapeModel.fromFirestore(doc)).toList();
+      final shapes = snapshot.docs
+          .map((doc) => ShapeModel.fromFirestore(doc))
+          .where((shape) => !shape.isDeleted)
+          .toList();
+      // zIndex 순 정렬 (클라이언트)
+      shapes.sort((a, b) => a.zIndex.compareTo(b.zIndex));
+      return shapes;
     });
   }
 

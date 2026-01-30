@@ -35,6 +35,9 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
   String? _hoveredAuthorName;
   Offset? _hoveredPosition;
 
+  // 현재 이벤트 인덱스 (이벤트 단위 이동용)
+  int _currentEventIndex = 0;
+
   @override
   Widget build(BuildContext context) {
     return Listener(
@@ -114,21 +117,32 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
                 ),
               ),
 
-            // 시간순 네비게이션 바
-            LayoutBuilder(
-              builder: (context, constraints) {
-                return TimelineNavigator(
-                  strokes: widget.controller.serverStrokes,
-                  texts: widget.controller.serverTexts,
-                  media: widget.controller.serverMedia,
-                  onJump: (position) {
-                    widget.controller.jumpToPosition(
-                      position,
-                      Size(constraints.maxWidth, constraints.maxHeight),
-                    );
-                  },
-                );
-              },
+            // 시간순 네비게이션 바 (좌측)
+            Positioned(
+              left: 8,
+              top: 60,
+              bottom: 100,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  return TimelineNavigator(
+                    strokes: widget.controller.serverStrokes,
+                    texts: widget.controller.serverTexts,
+                    media: widget.controller.serverMedia,
+                    onJump: (position) {
+                      final renderBox = context.findRenderObject() as RenderBox?;
+                      final size = renderBox?.size ?? const Size(400, 600);
+                      widget.controller.jumpToPosition(position, size);
+                    },
+                  );
+                },
+              ),
+            ),
+
+            // 이벤트 이동 화살표 (좌측 하단)
+            Positioned(
+              left: 8,
+              bottom: 16,
+              child: _buildEventNavigationButtons(),
             ),
           ],
         ),
@@ -309,6 +323,118 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
         );
       },
     );
+  }
+
+  /// 이벤트 단위 이동 버튼
+  Widget _buildEventNavigationButtons() {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.paper,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.border),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.1),
+            blurRadius: 4,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // 이전 이벤트
+          IconButton(
+            onPressed: _goToPreviousEvent,
+            icon: const Icon(Icons.keyboard_arrow_up),
+            iconSize: 24,
+            color: AppColors.ink,
+            tooltip: '이전 이벤트',
+          ),
+          Container(
+            width: 20,
+            height: 1,
+            color: AppColors.border,
+          ),
+          // 다음 이벤트
+          IconButton(
+            onPressed: _goToNextEvent,
+            icon: const Icon(Icons.keyboard_arrow_down),
+            iconSize: 24,
+            color: AppColors.ink,
+            tooltip: '다음 이벤트',
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 모든 이벤트 목록 가져오기
+  List<_TimelineEvent> _getAllEvents() {
+    final events = <_TimelineEvent>[];
+
+    // 스트로크
+    for (final stroke in widget.controller.serverStrokes) {
+      if (stroke.points.isNotEmpty) {
+        events.add(_TimelineEvent(
+          x: stroke.points.first.x,
+          y: stroke.points.first.y,
+          timestamp: stroke.createdAt,
+        ));
+      }
+    }
+
+    // 텍스트
+    for (final text in widget.controller.serverTexts) {
+      events.add(_TimelineEvent(
+        x: text.positionX ?? 0,
+        y: text.positionY ?? 0,
+        timestamp: text.createdAt,
+      ));
+    }
+
+    // 미디어
+    for (final m in widget.controller.serverMedia) {
+      events.add(_TimelineEvent(
+        x: m.x,
+        y: m.y,
+        timestamp: m.createdAt,
+      ));
+    }
+
+    // 시간순 정렬
+    events.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    return events;
+  }
+
+  /// 이전 이벤트로 이동
+  void _goToPreviousEvent() {
+    final events = _getAllEvents();
+    if (events.isEmpty) return;
+
+    setState(() {
+      _currentEventIndex = (_currentEventIndex - 1).clamp(0, events.length - 1);
+    });
+
+    final event = events[_currentEventIndex];
+    final renderBox = context.findRenderObject() as RenderBox?;
+    final size = renderBox?.size ?? const Size(400, 600);
+    widget.controller.jumpToPosition(Offset(event.x, event.y), size);
+  }
+
+  /// 다음 이벤트로 이동
+  void _goToNextEvent() {
+    final events = _getAllEvents();
+    if (events.isEmpty) return;
+
+    setState(() {
+      _currentEventIndex = (_currentEventIndex + 1).clamp(0, events.length - 1);
+    });
+
+    final event = events[_currentEventIndex];
+    final renderBox = context.findRenderObject() as RenderBox?;
+    final size = renderBox?.size ?? const Size(400, 600);
+    widget.controller.jumpToPosition(Offset(event.x, event.y), size);
   }
 
   void _onPointerDown(PointerDownEvent event) {
@@ -864,4 +990,17 @@ class _CanvasPainter extends CustomPainter {
   bool shouldRepaint(covariant _CanvasPainter oldDelegate) {
     return true;
   }
+}
+
+/// 이벤트 단위 이동용 간단한 이벤트 클래스
+class _TimelineEvent {
+  final double x;
+  final double y;
+  final DateTime timestamp;
+
+  _TimelineEvent({
+    required this.x,
+    required this.y,
+    required this.timestamp,
+  });
 }

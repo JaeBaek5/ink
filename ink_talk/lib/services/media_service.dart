@@ -20,11 +20,15 @@ class MediaService {
   /// 미디어 실시간 스트림
   Stream<List<MediaModel>> getMediaStream(String roomId) {
     return _mediaCollection(roomId)
-        .where('isDeleted', isEqualTo: false)
-        .orderBy('zIndex', descending: false)
         .snapshots()
         .map((snapshot) {
-      return snapshot.docs.map((doc) => MediaModel.fromFirestore(doc)).toList();
+      final media = snapshot.docs
+          .map((doc) => MediaModel.fromFirestore(doc))
+          .where((m) => !m.isDeleted)
+          .toList();
+      // zIndex 순 정렬 (클라이언트)
+      media.sort((a, b) => a.zIndex.compareTo(b.zIndex));
+      return media;
     });
   }
 

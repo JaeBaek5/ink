@@ -121,13 +121,9 @@ class _TimelineNavigatorState extends State<TimelineNavigator> {
     final events = _allEvents;
     if (events.isEmpty) return const SizedBox.shrink();
 
-    return Positioned(
-      right: 8,
-      top: 60,
-      bottom: 60,
-      child: SizedBox(
-        width: 40,
-        child: Column(
+    return SizedBox(
+      width: 40,
+      child: Column(
           children: [
             // 시간 표시 (상단)
             Container(
@@ -220,7 +216,6 @@ class _TimelineNavigatorState extends State<TimelineNavigator> {
             ),
           ],
         ),
-      ),
     );
   }
 
