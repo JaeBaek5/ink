@@ -53,7 +53,53 @@ class PenToolbar extends StatelessWidget {
 
             // 도형 선택
             _buildShapeButton(),
+
+            _buildDivider(),
+
+            // 펜 전용 모드 토글 (테스트용)
+            _buildPenOnlyToggle(),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// 펜 전용 모드 토글 (테스트용 - TODO: 나중에 제거 또는 설정으로 이동)
+  Widget _buildPenOnlyToggle() {
+    final isOn = controller.penOnlyMode;
+    return Tooltip(
+      message: isOn ? '펜 전용 모드 ON (터치/마우스 불가)' : '펜 전용 모드 OFF (터치/마우스 가능)',
+      child: InkWell(
+        onTap: controller.togglePenOnlyMode,
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+          decoration: BoxDecoration(
+            color: isOn ? AppColors.gold.withValues(alpha: 0.2) : Colors.green.withValues(alpha: 0.2),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(
+              color: isOn ? AppColors.gold : Colors.green,
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                isOn ? Icons.edit : Icons.touch_app,
+                size: 16,
+                color: isOn ? AppColors.gold : Colors.green,
+              ),
+              const SizedBox(width: 4),
+              Text(
+                isOn ? 'PEN' : 'ALL',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  color: isOn ? AppColors.gold : Colors.green,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

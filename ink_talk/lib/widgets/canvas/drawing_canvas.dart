@@ -91,12 +91,18 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     _currentInputKind = event.kind;
     _clearTooltip();
 
+    // 펜 전용 모드 확인
+    final penOnlyMode = widget.controller.penOnlyMode;
+
     // 패드에서 손가락은 이동/선택, 펜은 그리기
     final isStylus = event.kind == PointerDeviceKind.stylus ||
         event.kind == PointerDeviceKind.invertedStylus;
 
-    if (isStylus || event.kind == PointerDeviceKind.mouse) {
-      // 펜 또는 마우스: 그리기
+    // penOnlyMode가 꺼져있으면 마우스/터치도 그리기 가능
+    final canDraw = isStylus || 
+        (!penOnlyMode && (event.kind == PointerDeviceKind.mouse || event.kind == PointerDeviceKind.touch));
+
+    if (canDraw) {
       final localPoint = _transformPoint(event.localPosition);
       widget.controller.startStroke(localPoint);
     }
@@ -105,20 +111,28 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
   void _onPointerMove(PointerMoveEvent event) {
     if (_currentInputKind == null) return;
 
+    final penOnlyMode = widget.controller.penOnlyMode;
     final isStylus = _currentInputKind == PointerDeviceKind.stylus ||
         _currentInputKind == PointerDeviceKind.invertedStylus;
 
-    if (isStylus || _currentInputKind == PointerDeviceKind.mouse) {
+    final canDraw = isStylus || 
+        (!penOnlyMode && (_currentInputKind == PointerDeviceKind.mouse || _currentInputKind == PointerDeviceKind.touch));
+
+    if (canDraw) {
       final localPoint = _transformPoint(event.localPosition);
       widget.controller.updateStroke(localPoint);
     }
   }
 
   void _onPointerUp(PointerUpEvent event) {
+    final penOnlyMode = widget.controller.penOnlyMode;
     final isStylus = _currentInputKind == PointerDeviceKind.stylus ||
         _currentInputKind == PointerDeviceKind.invertedStylus;
 
-    if (isStylus || _currentInputKind == PointerDeviceKind.mouse) {
+    final canDraw = isStylus || 
+        (!penOnlyMode && (_currentInputKind == PointerDeviceKind.mouse || _currentInputKind == PointerDeviceKind.touch));
+
+    if (canDraw) {
       widget.controller.endStroke();
     }
 

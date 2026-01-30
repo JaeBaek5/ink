@@ -77,6 +77,16 @@ class CanvasController extends ChangeNotifier {
   String? _userId;
   String? _userName;
 
+  // 펜 전용 모드 (false = 마우스/터치로도 그리기 가능)
+  // TODO: 나중에 제거 또는 설정으로 이동 (테스트용 임시 기능)
+  bool _penOnlyMode = false;
+  bool get penOnlyMode => _penOnlyMode;
+
+  void togglePenOnlyMode() {
+    _penOnlyMode = !_penOnlyMode;
+    notifyListeners();
+  }
+
   // 현재 펜
   PenType _currentPen = PenType.pen1;
   PenType get currentPen => _currentPen;
