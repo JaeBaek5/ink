@@ -925,6 +925,16 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 특정 위치로 점프 (시간순 네비게이션용)
+  void jumpToPosition(Offset canvasPosition, Size viewportSize) {
+    // 해당 위치가 화면 중앙에 오도록 오프셋 계산
+    _canvasOffset = Offset(
+      -canvasPosition.dx * _canvasScale + viewportSize.width / 2,
+      -canvasPosition.dy * _canvasScale + viewportSize.height / 2,
+    );
+    notifyListeners();
+  }
+
   /// 캔버스 리셋
   void resetView() {
     _canvasOffset = Offset.zero;

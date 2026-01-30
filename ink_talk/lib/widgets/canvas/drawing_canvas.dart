@@ -8,6 +8,7 @@ import '../../models/shape_model.dart';
 import '../../models/stroke_model.dart';
 import '../../screens/canvas/canvas_controller.dart';
 import 'media_widget.dart';
+import 'timeline_navigator.dart';
 
 /// 드로잉 캔버스 위젯
 class DrawingCanvas extends StatefulWidget {
@@ -112,6 +113,23 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
                   ),
                 ),
               ),
+
+            // 시간순 네비게이션 바
+            LayoutBuilder(
+              builder: (context, constraints) {
+                return TimelineNavigator(
+                  strokes: widget.controller.serverStrokes,
+                  texts: widget.controller.serverTexts,
+                  media: widget.controller.serverMedia,
+                  onJump: (position) {
+                    widget.controller.jumpToPosition(
+                      position,
+                      Size(constraints.maxWidth, constraints.maxHeight),
+                    );
+                  },
+                );
+              },
+            ),
           ],
         ),
       ),
