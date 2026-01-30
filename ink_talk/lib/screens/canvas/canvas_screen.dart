@@ -11,10 +11,12 @@ import 'canvas_controller.dart';
 /// 캔버스(채팅방) 화면
 class CanvasScreen extends StatefulWidget {
   final RoomModel room;
+  final Offset? jumpToPosition; // 태그 원본 점프용
 
   const CanvasScreen({
     super.key,
     required this.room,
+    this.jumpToPosition,
   });
 
   @override
@@ -47,6 +49,14 @@ class _CanvasScreenState extends State<CanvasScreen> {
           userName: userName,
         );
         _isInitialized = true;
+
+        // 태그 원본 점프
+        if (widget.jumpToPosition != null) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            final size = MediaQuery.of(context).size;
+            _canvasController.jumpToPosition(widget.jumpToPosition!, size);
+          });
+        }
       }
     }
   }

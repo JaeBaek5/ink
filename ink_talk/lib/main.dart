@@ -7,6 +7,7 @@ import 'core/theme/app_theme.dart';
 import 'providers/auth_provider.dart';
 import 'providers/friend_provider.dart';
 import 'providers/room_provider.dart';
+import 'providers/tag_provider.dart';
 import 'router/app_router.dart';
 
 void main() async {
@@ -37,6 +38,8 @@ class InkApp extends StatelessWidget {
         ChangeNotifierProvider(create: (_) => FriendProvider()),
         // 채팅방 Provider
         ChangeNotifierProvider(create: (_) => RoomProvider()),
+        // 태그 Provider
+        ChangeNotifierProvider(create: (_) => TagProvider()),
       ],
       child: const _AppWithRouter(),
     );
