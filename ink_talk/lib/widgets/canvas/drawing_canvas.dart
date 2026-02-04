@@ -1,9 +1,14 @@
 import 'dart:math' as math;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../../core/constants/app_colors.dart';
-import '../../models/message_model.dart';
 import '../../models/media_model.dart';
+import '../../models/message_model.dart';
+import '../../models/tag_model.dart';
+import '../../providers/auth_provider.dart';
+import '../../providers/friend_provider.dart';
+import '../../services/tag_service.dart';
 import '../../models/shape_model.dart';
 import '../../models/stroke_model.dart';
 import '../../screens/canvas/canvas_controller.dart';
@@ -15,12 +20,21 @@ class DrawingCanvas extends StatefulWidget {
   final CanvasController controller;
   final String userId;
   final String roomId;
+  /// 방장 설정: false면 타임라인 로그 비공개
+  final bool logPublic;
+  /// 내보내기 캡처용 (RepaintBoundary에 연결)
+  final GlobalKey? repaintBoundaryKey;
+  /// 태그 원본 점프 시 하이라이트할 영역 (캔버스 좌표, null이면 미표시)
+  final Rect? highlightTagArea;
 
   const DrawingCanvas({
     super.key,
     required this.controller,
     required this.userId,
     required this.roomId,
+    this.logPublic = true,
+    this.repaintBoundaryKey,
+    this.highlightTagArea,
   });
 
   @override
@@ -38,6 +52,9 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
   // 현재 이벤트 인덱스 (이벤트 단위 이동용)
   int _currentEventIndex = 0;
 
+  // 롱프레스 위치 (손글씨 태그 메뉴용)
+  Offset? _longPressPosition;
+
   @override
   Widget build(BuildContext context) {
     return Listener(
@@ -52,8 +69,18 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
         onScaleEnd: _onScaleEnd,
         // 짧은 탭 (텍스트 입력 또는 작성자 표시)
         onTapUp: _onTapUp,
-        child: Stack(
-          children: [
+        // 손글씨 영역 롱프레스 → @친구 태그 메뉴
+        onLongPressStart: (details) => _longPressPosition = details.localPosition,
+        onLongPress: () {
+          final pos = _longPressPosition;
+          _longPressPosition = null;
+          if (pos != null) _onCanvasLongPress(pos);
+        },
+        onLongPressEnd: (_) => _longPressPosition = null,
+        child: RepaintBoundary(
+          key: widget.repaintBoundaryKey,
+          child: Stack(
+            children: [
             // 캔버스
             ClipRect(
               child: CustomPaint(
@@ -76,6 +103,7 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
                   currentUserId: widget.userId,
                   snapEnabled: widget.controller.snapEnabled,
                   gridSize: CanvasController.gridSize,
+                  highlightTagRect: widget.highlightTagArea,
                 ),
                 size: Size.infinite,
               ),
@@ -86,11 +114,13 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
               key: ValueKey(media.id),
               media: media,
               isSelected: widget.controller.selectedMedia?.id == media.id,
+              isResizeMode: widget.controller.isMediaInResizeMode(media.id),
               canvasOffset: widget.controller.canvasOffset,
               canvasScale: widget.controller.canvasScale,
               onTap: () => widget.controller.selectMedia(media),
               onLongPress: () => _showMediaOptions(context, media),
               onMove: (delta) => widget.controller.moveMedia(media.id, delta),
+              onResize: (width, height, {x, y}) => widget.controller.resizeMedia(media.id, width, height, x: x, y: y),
             )),
 
             // 텍스트 오브젝트 렌더링
@@ -117,11 +147,11 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
                 ),
               ),
 
-            // 시간순 네비게이션 바 (우측)
+            // 시간순 네비게이션 바 (우측, 위·아래 버튼과 겹치지 않도록 bottom 여유)
             Positioned(
               right: 8,
               top: 60,
-              bottom: 100,
+              bottom: 72,
               child: LayoutBuilder(
                 builder: (context, constraints) {
                   return TimelineNavigator(
@@ -133,18 +163,20 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
                       final size = renderBox?.size ?? const Size(400, 600);
                       widget.controller.jumpToPosition(position, size);
                     },
+                    logPublic: widget.logPublic,
                   );
                 },
               ),
             ),
 
-            // 이벤트 이동 화살표 (우측 하단)
+            // 이벤트 이동 화살표 (우측 하단, 네비게이션 바 왼쪽에 배치해 겹침 방지)
             Positioned(
-              right: 8,
+              right: 48,
               bottom: 16,
               child: _buildEventNavigationButtons(),
             ),
           ],
+        ),
         ),
       ),
     );
@@ -289,6 +321,33 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
                       ),
                       const Divider(height: 1),
                       ListTile(
+                        leading: const Icon(Icons.tag, color: AppColors.ink),
+                        title: const Text('@친구 태그'),
+                        onTap: () {
+                          Navigator.pop(context);
+                          _showTagFriendPicker(context, media);
+                        },
+                      ),
+                      ListTile(
+                        leading: Icon(
+                          media.isLocked ? Icons.lock_open : Icons.lock,
+                          color: AppColors.ink,
+                        ),
+                        title: Text(media.isLocked ? '잠금 해제' : '잠금'),
+                        onTap: () {
+                          Navigator.pop(context);
+                          widget.controller.setMediaLocked(media.id, !media.isLocked);
+                        },
+                      ),
+                      ListTile(
+                        leading: const Icon(Icons.aspect_ratio, color: AppColors.ink),
+                        title: const Text('크기 수정'),
+                        onTap: () {
+                          Navigator.pop(context);
+                          widget.controller.enterMediaResizeMode(media.id);
+                        },
+                      ),
+                      ListTile(
                         leading: const Icon(Icons.flip_to_front, color: AppColors.ink),
                         title: const Text('앞으로'),
                         onTap: () {
@@ -320,6 +379,300 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
               ),
             ),
           ],
+        );
+      },
+    );
+  }
+
+  /// 미디어에 @친구 태그: 친구 선택 피커 표시 후 태그 생성
+  void _showTagFriendPicker(BuildContext context, MediaModel media) {
+    final friendProvider = context.read<FriendProvider>();
+    final auth = context.read<AuthProvider>();
+    final userId = auth.user?.uid;
+    if (userId == null) return;
+
+    final tagService = TagService();
+    TagTargetType targetType;
+    switch (media.type) {
+      case MediaType.image:
+        targetType = TagTargetType.image;
+        break;
+      case MediaType.video:
+        targetType = TagTargetType.video;
+        break;
+      default:
+        targetType = TagTargetType.text; // PDF 등
+    }
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.paper,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.symmetric(vertical: 12),
+                decoration: BoxDecoration(
+                  color: AppColors.border,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16),
+                child: Text('태그할 친구 선택', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+              ),
+              const SizedBox(height: 8),
+              Flexible(
+                child: friendProvider.friends.isEmpty
+                    ? const Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Text('친구가 없습니다. 친구 탭에서 추가해 보세요.'),
+                      )
+                    : ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: friendProvider.friends.length,
+                        itemBuilder: (_, i) {
+                          final friend = friendProvider.friends[i];
+                          final user = friendProvider.getFriendUser(friend.friendId);
+                          final name = user?.displayName ?? user?.email ?? friend.friendId;
+                          return ListTile(
+                            leading: const Icon(Icons.person, color: AppColors.ink),
+                            title: Text(name),
+                            onTap: () async {
+                              Navigator.pop(ctx);
+                              try {
+                                final tag = TagModel(
+                                  id: '',
+                                  roomId: widget.roomId,
+                                  taggerId: userId,
+                                  taggedUserId: friend.friendId,
+                                  targetType: targetType,
+                                  targetId: media.id,
+                                  createdAt: DateTime.now(),
+                                );
+                                await tagService.createTag(tag);
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('$name 님을 태그했습니다.')),
+                                  );
+                                }
+                              } catch (e) {
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('태그 실패: $e')),
+                                  );
+                                }
+                              }
+                            },
+                          );
+                        },
+                      ),
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// 캔버스 롱프레스: 해당 위치의 손글씨(스트로크)가 있으면 @친구 태그 메뉴 표시
+  void _onCanvasLongPress(Offset localPosition) {
+    final canvasPoint = _transformPoint(localPosition);
+    final hit = _getStrokeAtPoint(canvasPoint);
+    if (hit == null) {
+      return;
+    }
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return Stack(
+          children: [
+            GestureDetector(
+              onTap: () => Navigator.pop(ctx),
+              child: Container(color: Colors.black.withValues(alpha: 0.3)),
+            ),
+            Positioned(
+              left: 16,
+              right: 16,
+              top: MediaQuery.of(context).size.height * 0.35,
+              child: Material(
+                color: AppColors.paper,
+                borderRadius: BorderRadius.circular(16),
+                child: SafeArea(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      ListTile(
+                        leading: const Icon(Icons.tag, color: AppColors.ink),
+                        title: const Text('@친구 태그'),
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          _showTagStrokeFriendPicker(context, hit.strokeId, hit.areaX, hit.areaY, hit.areaWidth, hit.areaHeight);
+                        },
+                      ),
+                      const SizedBox(height: 8),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  /// 해당 캔버스 좌표에 있는 스트로크 반환 (id + 영역). 없으면 null.
+  ({String strokeId, double areaX, double areaY, double areaWidth, double areaHeight})? _getStrokeAtPoint(Offset canvasPoint) {
+    const hitRadius = 24.0;
+
+    // 서버 스트로크 (역순으로 → 위에 그려진 것 우선)
+    for (final stroke in widget.controller.serverStrokes.reversed) {
+      if (stroke.isDeleted) continue;
+      for (final p in stroke.points) {
+        final o = Offset(p.x, p.y);
+        if ((o - canvasPoint).distance <= hitRadius) {
+          final (minX, maxX, minY, maxY) = _strokeBounds(stroke.points.map((p) => Offset(p.x, p.y)));
+          return (
+            strokeId: stroke.id,
+            areaX: minX,
+            areaY: minY,
+            areaWidth: (maxX - minX).clamp(1.0, double.infinity),
+            areaHeight: (maxY - minY).clamp(1.0, double.infinity),
+          );
+        }
+      }
+    }
+
+    // 로컬 스트로크
+    for (final stroke in widget.controller.localStrokes.reversed) {
+      final id = stroke.firestoreId ?? stroke.id;
+      for (final p in stroke.points) {
+        if ((p - canvasPoint).distance <= hitRadius) {
+          final (minX, maxX, minY, maxY) = _strokeBounds(stroke.points);
+          return (
+            strokeId: id,
+            areaX: minX,
+            areaY: minY,
+            areaWidth: (maxX - minX).clamp(1.0, double.infinity),
+            areaHeight: (maxY - minY).clamp(1.0, double.infinity),
+          );
+        }
+      }
+    }
+
+    return null;
+  }
+
+  (double, double, double, double) _strokeBounds(Iterable<Offset> points) {
+    if (points.isEmpty) return (0, 0, 0, 0);
+    double minX = double.infinity, maxX = double.negativeInfinity;
+    double minY = double.infinity, maxY = double.negativeInfinity;
+    for (final p in points) {
+      if (p.dx < minX) minX = p.dx;
+      if (p.dx > maxX) maxX = p.dx;
+      if (p.dy < minY) minY = p.dy;
+      if (p.dy > maxY) maxY = p.dy;
+    }
+    return (minX, maxX, minY, maxY);
+  }
+
+  /// 손글씨(스트로크)에 @친구 태그: 친구 선택 후 태그 생성 (영역 포함)
+  void _showTagStrokeFriendPicker(BuildContext context, String strokeId, double areaX, double areaY, double areaWidth, double areaHeight) {
+    final friendProvider = context.read<FriendProvider>();
+    final auth = context.read<AuthProvider>();
+    final userId = auth.user?.uid;
+    if (userId == null) return;
+
+    final tagService = TagService();
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.paper,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.symmetric(vertical: 12),
+                decoration: BoxDecoration(
+                  color: AppColors.border,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16),
+                child: Text('태그할 친구 선택', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+              ),
+              const SizedBox(height: 8),
+              Flexible(
+                child: friendProvider.friends.isEmpty
+                    ? const Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Text('친구가 없습니다. 친구 탭에서 추가해 보세요.'),
+                      )
+                    : ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: friendProvider.friends.length,
+                        itemBuilder: (_, i) {
+                          final friend = friendProvider.friends[i];
+                          final user = friendProvider.getFriendUser(friend.friendId);
+                          final name = user?.displayName ?? user?.email ?? friend.friendId;
+                          return ListTile(
+                            leading: const Icon(Icons.person, color: AppColors.ink),
+                            title: Text(name),
+                            onTap: () async {
+                              Navigator.pop(ctx);
+                              try {
+                                final tag = TagModel(
+                                  id: '',
+                                  roomId: widget.roomId,
+                                  taggerId: userId,
+                                  taggedUserId: friend.friendId,
+                                  targetType: TagTargetType.stroke,
+                                  targetId: strokeId,
+                                  areaX: areaX,
+                                  areaY: areaY,
+                                  areaWidth: areaWidth,
+                                  areaHeight: areaHeight,
+                                  createdAt: DateTime.now(),
+                                );
+                                await tagService.createTag(tag);
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('$name 님을 태그했습니다.')),
+                                  );
+                                }
+                              } catch (e) {
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('태그 실패: $e')),
+                                  );
+                                }
+                              }
+                            },
+                          );
+                        },
+                      ),
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
         );
       },
     );
@@ -677,6 +1030,7 @@ class _CanvasPainter extends CustomPainter {
   final String currentUserId;
   final bool snapEnabled;
   final double gridSize;
+  final Rect? highlightTagRect;
 
   _CanvasPainter({
     required this.serverStrokes,
@@ -697,6 +1051,7 @@ class _CanvasPainter extends CustomPainter {
     required this.currentUserId,
     required this.snapEnabled,
     required this.gridSize,
+    this.highlightTagRect,
   });
 
   @override
@@ -744,6 +1099,23 @@ class _CanvasPainter extends CustomPainter {
     // 현재 그리는 중인 스트로크
     if (currentStroke != null) {
       _drawLocalStroke(canvas, currentStroke!, 0.7);
+    }
+
+    // 태그 영역 하이라이트 (모아보기 → 원본 점프 시)
+    if (highlightTagRect != null) {
+      final fillPaint = Paint()
+        ..color = AppColors.gold.withValues(alpha: 0.12)
+        ..style = PaintingStyle.fill;
+      final strokePaint = Paint()
+        ..color = AppColors.gold
+        ..strokeWidth = 2.5
+        ..style = PaintingStyle.stroke;
+      final rrect = RRect.fromRectAndRadius(
+        highlightTagRect!.inflate(4),
+        const Radius.circular(4),
+      );
+      canvas.drawRRect(rrect, fillPaint);
+      canvas.drawRRect(rrect, strokePaint);
     }
 
     canvas.restore();

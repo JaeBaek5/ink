@@ -64,6 +64,16 @@ class RoomModel {
   final DateTime lastActivityAt;
   final String? lastEventType; // stroke, text, image, video, pdf
   final String? lastEventPreview;
+  /// 방장 설정: 멤버의 캔버스 내보내기 허용 여부
+  final bool exportAllowed;
+  /// 방장 설정: 내보내기 시 워터마크 필수 여부
+  final bool watermarkForced;
+  /// 방장 설정: 시간순 로그(타임라인) 공개 여부
+  final bool logPublic;
+  /// 방장 설정: 멤버의 도형 수정 허용 여부
+  final bool canEditShapes;
+  /// 방장 설정: 캔버스 확장 방식 ('rectangular' | 'free', null이면 사각 확장)
+  final String? canvasExpandMode;
 
   RoomModel({
     required this.id,
@@ -76,6 +86,11 @@ class RoomModel {
     required this.lastActivityAt,
     this.lastEventType,
     this.lastEventPreview,
+    this.exportAllowed = true,
+    this.watermarkForced = false,
+    this.logPublic = true,
+    this.canEditShapes = true,
+    this.canvasExpandMode,
   });
 
   factory RoomModel.fromFirestore(DocumentSnapshot doc) {
@@ -100,6 +115,11 @@ class RoomModel {
       lastActivityAt: (data['lastActivityAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
       lastEventType: data['lastEventType'],
       lastEventPreview: data['lastEventPreview'],
+      exportAllowed: data['exportAllowed'] ?? true,
+      watermarkForced: data['watermarkForced'] ?? false,
+      logPublic: data['logPublic'] ?? true,
+      canEditShapes: data['canEditShapes'] ?? true,
+      canvasExpandMode: data['canvasExpandMode'] as String?,
     );
   }
 
@@ -114,6 +134,38 @@ class RoomModel {
       'lastActivityAt': Timestamp.fromDate(lastActivityAt),
       'lastEventType': lastEventType,
       'lastEventPreview': lastEventPreview,
+      'exportAllowed': exportAllowed,
+      'watermarkForced': watermarkForced,
+      'logPublic': logPublic,
+      'canEditShapes': canEditShapes,
+      if (canvasExpandMode != null) 'canvasExpandMode': canvasExpandMode,
     };
+  }
+
+  /// 방장 또는 관리자만 설정 가능한 항목 수정용 복사
+  RoomModel copyWithHostSettings({
+    bool? exportAllowed,
+    bool? watermarkForced,
+    bool? logPublic,
+    bool? canEditShapes,
+    String? canvasExpandMode,
+  }) {
+    return RoomModel(
+      id: id,
+      type: type,
+      name: name,
+      imageUrl: imageUrl,
+      memberIds: memberIds,
+      members: members,
+      createdAt: createdAt,
+      lastActivityAt: lastActivityAt,
+      lastEventType: lastEventType,
+      lastEventPreview: lastEventPreview,
+      exportAllowed: exportAllowed ?? this.exportAllowed,
+      watermarkForced: watermarkForced ?? this.watermarkForced,
+      logPublic: logPublic ?? this.logPublic,
+      canEditShapes: canEditShapes ?? this.canEditShapes,
+      canvasExpandMode: canvasExpandMode ?? this.canvasExpandMode,
+    );
   }
 }

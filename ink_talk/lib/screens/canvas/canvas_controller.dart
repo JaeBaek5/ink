@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import '../../models/message_model.dart';
 import '../../models/shape_model.dart';
 import '../../models/stroke_model.dart';
@@ -8,6 +9,7 @@ import '../../services/stroke_service.dart';
 import '../../services/text_service.dart';
 import '../../models/media_model.dart';
 import '../../services/media_service.dart';
+import '../../services/settings_service.dart';
 
 /// 펜 종류
 enum PenType {
@@ -96,6 +98,10 @@ class CanvasController extends ChangeNotifier {
   String? _roomId;
   String? _userId;
   String? _userName;
+  /// 방 설정: 캔버스 확장 방식 (방장이 방 설정에서 지정, 확장 로직에서 사용)
+  CanvasExpandMode? _canvasExpandMode;
+  CanvasExpandMode get canvasExpandMode =>
+      _canvasExpandMode ?? CanvasExpandMode.rectangular;
 
   // 입력 모드
   InputMode _inputMode = InputMode.pen;
@@ -151,6 +157,24 @@ class CanvasController extends ChangeNotifier {
   // 선택된 미디어
   MediaModel? _selectedMedia;
   MediaModel? get selectedMedia => _selectedMedia;
+
+  /// 크기 수정 모드인 미디어 ID (롱프레스 → 크기 수정 선택 시에만 설정)
+  String? _mediaInResizeMode;
+  bool isMediaInResizeMode(String mediaId) => _mediaInResizeMode == mediaId;
+  void enterMediaResizeMode(String mediaId) {
+    try {
+      final media = _serverMedia.firstWhere((m) => m.id == mediaId);
+      _mediaInResizeMode = mediaId;
+      _selectedMedia = media;
+      notifyListeners();
+    } catch (_) {}
+  }
+  void clearMediaResizeMode() {
+    if (_mediaInResizeMode != null) {
+      _mediaInResizeMode = null;
+      notifyListeners();
+    }
+  }
 
   // 미디어 업로드 중
   bool _isUploading = false;
@@ -230,6 +254,17 @@ class CanvasController extends ChangeNotifier {
   Timer? _confirmTimer;
   static const _confirmDelay = Duration(seconds: 2);
 
+  // 오프라인 대기열 (저장 실패 시 재시도용)
+  final List<_PendingStroke> _pendingRetry = [];
+  int get pendingQueueCount => _pendingRetry.length;
+  bool get hasPendingQueue => _pendingRetry.isNotEmpty;
+
+  /// 전송 중인 스트로크 수 (로컬 고스트 + 대기열)
+  int get sendingStrokesCount => _localStrokes.length + _pendingRetry.length;
+
+  /// 업로드(사진/영상 등) 시 사용자 메시지 콜백 (스낵바 등)
+  void Function(String message)? uploadMessageCallback;
+
   // Getters
   Color get currentColor {
     if (_isAutoColor && _userId != null) {
@@ -245,10 +280,12 @@ class CanvasController extends ChangeNotifier {
   int get selectedWidthIndex => _selectedWidthIndex;
 
   /// 초기화 (채팅방 연결)
-  void initialize(String roomId, String userId, {String? userName}) {
+  void initialize(String roomId, String userId,
+      {String? userName, CanvasExpandMode? canvasExpandMode}) {
     _roomId = roomId;
     _userId = userId;
     _userName = userName;
+    _canvasExpandMode = canvasExpandMode;
 
     // 실시간 스트로크 구독
     _strokesSubscription?.cancel();
@@ -502,29 +539,47 @@ class CanvasController extends ChangeNotifier {
 
   /// 이미지 업로드
   Future<void> uploadImage(Offset position) async {
-    if (_roomId == null || _userId == null) return;
+    if (_roomId == null || _userId == null) {
+      uploadMessageCallback?.call('채팅방에 연결된 후 다시 시도해 주세요.');
+      return;
+    }
 
-    final file = await _mediaService.pickImage();
-    if (file == null) return;
-
+    // 탭 직후 바로 로딩 표시 (갤러리 열리기 전에 반응 있음)
     _isUploading = true;
     notifyListeners();
 
+    XFile? file;
     try {
-      final url = await _mediaService.uploadFile(
+      file = await _mediaService.pickImage();
+    } catch (e) {
+      debugPrint('갤러리 열기 오류: $e');
+      _isUploading = false;
+      notifyListeners();
+      uploadMessageCallback?.call('사진 선택 중 오류가 났습니다. 권한을 확인해 주세요.');
+      return;
+    }
+
+    if (file == null) {
+      _isUploading = false;
+      notifyListeners();
+      uploadMessageCallback?.call('사진 선택이 취소되었습니다.');
+      return;
+    }
+
+    try {
+      final url = await _mediaService.uploadImageFile(
         roomId: _roomId!,
-        filePath: file.path,
-        fileName: file.name,
-        type: MediaType.image,
+        imageFile: file,
       );
 
+      final fileName = file.name.isNotEmpty ? file.name : 'image.jpg';
       final media = MediaModel(
         id: '',
         roomId: _roomId!,
         senderId: _userId!,
         type: MediaType.image,
         url: url,
-        fileName: file.name,
+        fileName: fileName,
         x: position.dx,
         y: position.dy,
         width: 200,
@@ -534,8 +589,22 @@ class CanvasController extends ChangeNotifier {
       );
 
       await _mediaService.saveMedia(media);
+      uploadMessageCallback?.call('사진이 추가되었습니다.');
     } catch (e) {
       debugPrint('이미지 업로드 오류: $e');
+      final msg = e.toString().toLowerCase();
+      final isStorageRule = msg.contains('permission') ||
+          msg.contains('403') ||
+          msg.contains('unauthorized') ||
+          msg.contains('security') ||
+          msg.contains('rules');
+      if (isStorageRule) {
+        uploadMessageCallback?.call(
+          'Storage 보안 규칙 오류일 수 있습니다. Firebase 콘솔 → Storage → 규칙에서 로그인 사용자 허용 규칙을 적용해 주세요.',
+        );
+      } else {
+        uploadMessageCallback?.call('업로드에 실패했습니다. 네트워크를 확인해 주세요.');
+      }
     }
 
     _isUploading = false;
@@ -632,10 +701,13 @@ class CanvasController extends ChangeNotifier {
     return _serverMedia.map((m) => m.zIndex).reduce((a, b) => a > b ? a : b);
   }
 
-  /// 미디어 선택
+  /// 미디어 선택 (다른 미디어 선택 또는 선택 해제 시 크기 수정 모드 해제)
   void selectMedia(MediaModel? media) {
     _selectedMedia = media;
     _selectedShape = null;
+    if (media == null || _mediaInResizeMode != media.id) {
+      _mediaInResizeMode = null;
+    }
     notifyListeners();
   }
 
@@ -651,12 +723,14 @@ class CanvasController extends ChangeNotifier {
     );
   }
 
-  /// 미디어 크기 조절
-  Future<void> resizeMedia(String mediaId, double width, double height) async {
+  /// 미디어 크기 조절 (왼쪽/위쪽 핸들 시 x, y 함께 전달)
+  Future<void> resizeMedia(String mediaId, double width, double height, {double? x, double? y}) async {
     if (_roomId == null) return;
     await _mediaService.updateMedia(
       _roomId!,
       mediaId,
+      x: x,
+      y: y,
       width: width,
       height: height,
     );
@@ -666,6 +740,12 @@ class CanvasController extends ChangeNotifier {
   Future<void> setMediaOpacity(String mediaId, double opacity) async {
     if (_roomId == null) return;
     await _mediaService.updateMedia(_roomId!, mediaId, opacity: opacity);
+  }
+
+  /// 미디어 잠금/해제
+  Future<void> setMediaLocked(String mediaId, bool locked) async {
+    if (_roomId == null) return;
+    await _mediaService.updateMedia(_roomId!, mediaId, isLocked: locked);
   }
 
   /// 미디어 삭제
@@ -794,37 +874,32 @@ class CanvasController extends ChangeNotifier {
     _localStrokes.add(stroke);
     notifyListeners();
 
-    // Firestore에 저장
-    try {
-      final points = stroke.points.map((p) {
-        return StrokePoint(
-          x: p.dx,
-          y: p.dy,
-          timestamp: DateTime.now().millisecondsSinceEpoch,
-        );
-      }).toList();
-
-      // Douglas-Peucker 알고리즘으로 압축 (epsilon = 1.0)
-      final simplifiedPoints = StrokeService.simplifyPoints(points, 1.0);
-
-      final strokeModel = StrokeModel(
-        id: stroke.id,
-        roomId: _roomId!,
-        senderId: stroke.senderId,
-        points: simplifiedPoints,
-        style: PenStyle(
-          color: '#${stroke.color.toARGB32().toRadixString(16).padLeft(8, '0').substring(2)}',
-          width: stroke.strokeWidth,
-          penType: stroke.penType.name,
-        ),
-        createdAt: stroke.createdAt,
-        isConfirmed: false,
+    final points = stroke.points.map((p) {
+      return StrokePoint(
+        x: p.dx,
+        y: p.dy,
+        timestamp: DateTime.now().millisecondsSinceEpoch,
       );
+    }).toList();
+    final simplifiedPoints = StrokeService.simplifyPoints(points, 1.0);
+    final strokeModel = StrokeModel(
+      id: stroke.id,
+      roomId: _roomId!,
+      senderId: stroke.senderId,
+      points: simplifiedPoints,
+      style: PenStyle(
+        color: '#${stroke.color.toARGB32().toRadixString(16).padLeft(8, '0').substring(2)}',
+        width: stroke.strokeWidth,
+        penType: stroke.penType.name,
+      ),
+      createdAt: stroke.createdAt,
+      isConfirmed: false,
+    );
 
+    try {
       final firestoreId = await _strokeService.saveStroke(strokeModel);
       stroke.firestoreId = firestoreId;
 
-      // 2초 후 확정
       _confirmTimer?.cancel();
       _confirmTimer = Timer(_confirmDelay, () {
         _confirmStroke(stroke);
@@ -834,8 +909,33 @@ class CanvasController extends ChangeNotifier {
       _redoStack.clear();
     } catch (e) {
       debugPrint('스트로크 저장 오류: $e');
-      // 로컬에서 제거
-      _localStrokes.remove(stroke);
+      _pendingRetry.add(_PendingStroke(stroke: stroke, model: strokeModel));
+      notifyListeners();
+    }
+  }
+
+  /// 대기열 스트로크 재전송 (재연결 후 호출)
+  Future<void> retryPendingStrokes() async {
+    if (_pendingRetry.isEmpty || _roomId == null) return;
+
+    final toRetry = List<_PendingStroke>.from(_pendingRetry);
+    _pendingRetry.clear();
+    notifyListeners();
+
+    for (final item in toRetry) {
+      try {
+        final firestoreId = await _strokeService.saveStroke(item.model);
+        item.stroke.firestoreId = firestoreId;
+        _confirmTimer?.cancel();
+        _confirmTimer = Timer(_confirmDelay, () {
+          _confirmStroke(item.stroke);
+        });
+        _undoStack.add(firestoreId);
+        _redoStack.clear();
+      } catch (e) {
+        debugPrint('재전송 실패: $e');
+        _pendingRetry.add(item);
+      }
       notifyListeners();
     }
   }
@@ -914,7 +1014,7 @@ class CanvasController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// 캔버스 확대/축소
+  /// 캔버스 확대/축소 (scale: 배율, focalPoint: 화면상의 초점)
   void zoom(double scale, Offset focalPoint) {
     final newScale = (_canvasScale * scale).clamp(0.1, 5.0);
 
@@ -923,6 +1023,16 @@ class CanvasController extends ChangeNotifier {
     _canvasScale = newScale;
 
     notifyListeners();
+  }
+
+  /// 버튼으로 확대 (우측 하단 + 버튼용)
+  void zoomIn(Offset viewportCenter) {
+    zoom(1.25, viewportCenter);
+  }
+
+  /// 버튼으로 축소 (우측 하단 - 버튼용)
+  void zoomOut(Offset viewportCenter) {
+    zoom(0.8, viewportCenter);
   }
 
   /// 특정 위치로 점프 (시간순 네비게이션용)
@@ -956,4 +1066,10 @@ class CanvasController extends ChangeNotifier {
     _confirmTimer?.cancel();
     super.dispose();
   }
+}
+
+class _PendingStroke {
+  final LocalStrokeData stroke;
+  final StrokeModel model;
+  _PendingStroke({required this.stroke, required this.model});
 }

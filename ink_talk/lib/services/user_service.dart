@@ -100,6 +100,15 @@ class UserService {
     if (updates.isNotEmpty) {
       await _usersCollection.doc(currentUserId).update(updates);
     }
+
+    if (displayName != null) {
+      await _auth.currentUser?.updateDisplayName(displayName);
+    }
+  }
+
+  /// 사용자 문서 삭제 (탈퇴 시 Firestore 정리)
+  Future<void> deleteUserDocument(String uid) async {
+    await _usersCollection.doc(uid).delete();
   }
 
   /// 랜덤 visibleId 생성

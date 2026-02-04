@@ -37,6 +37,7 @@ class MediaModel {
   // 메타
   final DateTime createdAt;
   final bool isDeleted;
+  final bool isLocked; // 잠금 시 이동·크기 조정 불가
 
   MediaModel({
     required this.id,
@@ -57,6 +58,7 @@ class MediaModel {
     this.currentPage,
     required this.createdAt,
     this.isDeleted = false,
+    this.isLocked = false,
   });
 
   factory MediaModel.fromFirestore(DocumentSnapshot doc) {
@@ -82,6 +84,7 @@ class MediaModel {
       totalPages: data['totalPages'],
       createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
       isDeleted: data['isDeleted'] ?? false,
+      isLocked: data['isLocked'] ?? false,
     );
   }
 
@@ -103,6 +106,7 @@ class MediaModel {
       'totalPages': totalPages,
       'createdAt': Timestamp.fromDate(createdAt),
       'isDeleted': isDeleted,
+      'isLocked': isLocked,
     };
   }
 
@@ -114,6 +118,7 @@ class MediaModel {
     double? opacity,
     int? zIndex,
     int? currentPage,
+    bool? isLocked,
   }) {
     return MediaModel(
       id: id,
@@ -134,6 +139,7 @@ class MediaModel {
       currentPage: currentPage ?? this.currentPage,
       createdAt: createdAt,
       isDeleted: isDeleted,
+      isLocked: isLocked ?? this.isLocked,
     );
   }
 }

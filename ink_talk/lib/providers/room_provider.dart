@@ -110,6 +110,11 @@ class RoomProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// 채팅방 실시간 스트림 (단일 방)
+  Stream<RoomModel?> getRoomStream(String roomId) {
+    return _roomService.getRoomStream(roomId);
+  }
+
   /// 채팅방 나가기
   Future<bool> leaveRoom(String roomId, String userId) async {
     _isLoading = true;
@@ -164,9 +169,23 @@ class RoomProvider extends ChangeNotifier {
     String roomId, {
     String? name,
     String? imageUrl,
+    bool? exportAllowed,
+    bool? watermarkForced,
+    bool? logPublic,
+    bool? canEditShapes,
+    String? canvasExpandMode,
   }) async {
     try {
-      await _roomService.updateRoom(roomId, name: name, imageUrl: imageUrl);
+      await _roomService.updateRoom(
+        roomId,
+        name: name,
+        imageUrl: imageUrl,
+        exportAllowed: exportAllowed,
+        watermarkForced: watermarkForced,
+        logPublic: logPublic,
+        canEditShapes: canEditShapes,
+        canvasExpandMode: canvasExpandMode,
+      );
       return true;
     } catch (e) {
       _errorMessage = e.toString().replaceAll('Exception: ', '');

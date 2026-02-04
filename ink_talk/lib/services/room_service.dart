@@ -78,6 +78,10 @@ class RoomService {
       'lastActivityAt': Timestamp.fromDate(now),
       'lastEventType': null,
       'lastEventPreview': null,
+      'exportAllowed': true,
+      'watermarkForced': false,
+      'logPublic': true,
+      'canEditShapes': true,
     };
 
     final docRef = await _roomsCollection.add(roomData);
@@ -127,6 +131,10 @@ class RoomService {
       'lastActivityAt': Timestamp.fromDate(now),
       'lastEventType': 'system',
       'lastEventPreview': '채팅방이 생성되었습니다.',
+      'exportAllowed': true,
+      'watermarkForced': false,
+      'logPublic': true,
+      'canEditShapes': true,
     };
 
     final docRef = await _roomsCollection.add(roomData);
@@ -218,10 +226,20 @@ class RoomService {
     String roomId, {
     String? name,
     String? imageUrl,
+    bool? exportAllowed,
+    bool? watermarkForced,
+    bool? logPublic,
+    bool? canEditShapes,
+    String? canvasExpandMode,
   }) async {
     final updates = <String, dynamic>{};
     if (name != null) updates['name'] = name;
     if (imageUrl != null) updates['imageUrl'] = imageUrl;
+    if (exportAllowed != null) updates['exportAllowed'] = exportAllowed;
+    if (watermarkForced != null) updates['watermarkForced'] = watermarkForced;
+    if (logPublic != null) updates['logPublic'] = logPublic;
+    if (canEditShapes != null) updates['canEditShapes'] = canEditShapes;
+    if (canvasExpandMode != null) updates['canvasExpandMode'] = canvasExpandMode;
 
     if (updates.isNotEmpty) {
       await _roomsCollection.doc(roomId).update(updates);
@@ -294,6 +312,10 @@ class RoomService {
       'lastActivityAt': Timestamp.fromDate(now),
       'lastEventType': 'system',
       'lastEventPreview': '캔버스 테스트를 시작해보세요!',
+      'exportAllowed': true,
+      'watermarkForced': false,
+      'logPublic': true,
+      'canEditShapes': true,
     };
 
     final docRef = await _roomsCollection.add(roomData);

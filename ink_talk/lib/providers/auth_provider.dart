@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../services/auth_service.dart';
+import '../services/user_service.dart';
 
 /// 인증 상태
 enum AuthStatus {
@@ -84,6 +85,29 @@ class AuthProvider extends ChangeNotifier {
     } finally {
       _isLoading = false;
       notifyListeners();
+    }
+  }
+
+  /// 계정 삭제 (탈퇴). Firestore 사용자 문서 삭제 후 Auth 계정 삭제
+  Future<bool> deleteAccount() async {
+    final uid = _user?.uid;
+    if (uid == null) return false;
+
+    _isLoading = true;
+    _errorMessage = null;
+    notifyListeners();
+
+    try {
+      await UserService().deleteUserDocument(uid);
+      await _authService.deleteAccount();
+      _isLoading = false;
+      notifyListeners();
+      return true;
+    } catch (e) {
+      _errorMessage = e.toString();
+      _isLoading = false;
+      notifyListeners();
+      return false;
     }
   }
 

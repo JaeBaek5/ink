@@ -59,7 +59,7 @@ class MediaService {
     return result?.files.firstOrNull;
   }
 
-  /// 파일 업로드 (Firebase Storage)
+  /// 파일 업로드 (Firebase Storage) — 경로로 업로드
   Future<String> uploadFile({
     required String roomId,
     required String filePath,
@@ -67,19 +67,36 @@ class MediaService {
     required MediaType type,
   }) async {
     try {
-      final ref = _storage.ref().child('rooms/$roomId/media/${DateTime.now().millisecondsSinceEpoch}_$fileName');
+      final safeName = fileName.isNotEmpty ? fileName : 'image.jpg';
+      final ref = _storage.ref().child('rooms/$roomId/media/${DateTime.now().millisecondsSinceEpoch}_$safeName');
       final uploadTask = ref.putFile(File(filePath));
-      
-      // 업로드 진행률 (선택적 로깅)
-      uploadTask.snapshotEvents.listen((snapshot) {
-        final progress = snapshot.bytesTransferred / snapshot.totalBytes;
-        debugPrint('업로드 진행률: ${(progress * 100).toStringAsFixed(1)}%');
-      });
 
       final snapshot = await uploadTask;
       return await snapshot.ref.getDownloadURL();
     } catch (e) {
       debugPrint('파일 업로드 실패: $e');
+      rethrow;
+    }
+  }
+
+  /// 이미지 파일 업로드 (XFile — path가 null이어도 바이트로 업로드)
+  Future<String> uploadImageFile({
+    required String roomId,
+    required XFile imageFile,
+  }) async {
+    try {
+      final bytes = await imageFile.readAsBytes();
+      final name = imageFile.name.isNotEmpty ? imageFile.name : 'image.jpg';
+      final ref = _storage.ref().child('rooms/$roomId/media/${DateTime.now().millisecondsSinceEpoch}_$name');
+      final uploadTask = ref.putData(
+        bytes,
+        SettableMetadata(contentType: 'image/jpeg'),
+      );
+
+      final snapshot = await uploadTask;
+      return await snapshot.ref.getDownloadURL();
+    } catch (e) {
+      debugPrint('이미지 업로드 실패: $e');
       rethrow;
     }
   }
@@ -103,6 +120,7 @@ class MediaService {
     double? height,
     double? opacity,
     int? zIndex,
+    bool? isLocked,
   }) async {
     try {
       final updates = <String, dynamic>{};
@@ -112,6 +130,7 @@ class MediaService {
       if (height != null) updates['height'] = height;
       if (opacity != null) updates['opacity'] = opacity;
       if (zIndex != null) updates['zIndex'] = zIndex;
+      if (isLocked != null) updates['isLocked'] = isLocked;
 
       if (updates.isNotEmpty) {
         await _mediaCollection(roomId).doc(mediaId).update(updates);

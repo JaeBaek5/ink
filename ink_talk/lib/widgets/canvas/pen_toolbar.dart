@@ -6,10 +6,13 @@ import '../../screens/canvas/canvas_controller.dart';
 /// 펜 툴바 (상단 중앙)
 class PenToolbar extends StatelessWidget {
   final CanvasController controller;
+  /// 방장 설정: false면 도형 버튼 비활성
+  final bool canEditShapes;
 
   const PenToolbar({
     super.key,
     required this.controller,
+    this.canEditShapes = true,
   });
 
   @override
@@ -389,7 +392,30 @@ class PenToolbar extends StatelessWidget {
   /// 도형 선택
   Widget _buildShapeButton() {
     final isShapeMode = controller.inputMode == InputMode.shape;
-    
+
+    if (!canEditShapes) {
+      return Tooltip(
+        message: '방장이 도형 수정을 제한했습니다.',
+        child: InkWell(
+          onTap: () {
+            // SnackBar is shown by caller if needed
+          },
+          borderRadius: BorderRadius.circular(8),
+          child: Container(
+            padding: const EdgeInsets.all(8),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.crop_square, size: 20, color: AppColors.mutedGray),
+                const SizedBox(width: 2),
+                Icon(Icons.arrow_drop_down, size: 16, color: AppColors.mutedGray),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
     return PopupMenuButton<ShapeType>(
       tooltip: '도형',
       onSelected: (type) {

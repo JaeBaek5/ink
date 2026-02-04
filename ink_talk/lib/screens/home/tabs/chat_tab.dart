@@ -4,6 +4,7 @@ import '../../../core/constants/app_colors.dart';
 import '../../../models/room_model.dart';
 import '../../../providers/auth_provider.dart';
 import '../../../providers/room_provider.dart';
+import '../../../services/export_service.dart';
 import '../../../widgets/chat/puzzle_card.dart';
 import '../../canvas/canvas_screen.dart';
 import '../../chat/create_chat_screen.dart';
@@ -261,6 +262,25 @@ class _ChatTabState extends State<ChatTab> {
 
               // 그룹 채팅 전용 옵션
               if (room.type == RoomType.group) ...[
+                // 초대 링크 생성 (선택)
+                ListTile(
+                  leading: const Icon(Icons.link, color: AppColors.ink),
+                  title: const Text('초대 링크 생성'),
+                  onTap: () async {
+                    Navigator.pop(context);
+                    final authProvider = context.read<AuthProvider>();
+                    final link = await ExportService().createShareLink(
+                      roomId: room.id,
+                      userId: authProvider.user?.uid ?? '',
+                    );
+                    if (link != null && context.mounted) {
+                      await ExportService().shareLink(
+                        link,
+                        message: '${room.name ?? 'INK 채팅방'}에 초대합니다!\n$link',
+                      );
+                    }
+                  },
+                ),
                 // 멤버 초대 (Admin 이상)
                 if (myRole == MemberRole.owner || myRole == MemberRole.admin)
                   ListTile(
@@ -318,6 +338,15 @@ class _ChatTabState extends State<ChatTab> {
 
   void _showRoomSettingsSheet(BuildContext context, RoomModel room) {
     final nameController = TextEditingController(text: room.name);
+    final authProvider = context.read<AuthProvider>();
+    final myUserId = authProvider.user?.uid ?? '';
+    final myRole = room.members[myUserId]?.role;
+    final isHost = myRole == MemberRole.owner || myRole == MemberRole.admin;
+
+    bool exportAllowed = room.exportAllowed;
+    bool watermarkForced = room.watermarkForced;
+    bool logPublic = room.logPublic;
+    bool canEditShapes = room.canEditShapes;
 
     showModalBottomSheet(
       context: context,
@@ -327,84 +356,143 @@ class _ChatTabState extends State<ChatTab> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (context) {
-        return Padding(
-          padding: EdgeInsets.only(
-            bottom: MediaQuery.of(context).viewInsets.bottom,
-          ),
-          child: SafeArea(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  width: 40,
-                  height: 4,
-                  margin: const EdgeInsets.symmetric(vertical: 12),
-                  decoration: BoxDecoration(
-                    color: AppColors.border,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-                const Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Text(
-                    '채팅방 설정',
-                    style: TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: TextField(
-                    controller: nameController,
-                    decoration: const InputDecoration(
-                      labelText: '채팅방 이름',
-                      border: OutlineInputBorder(),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-
-                // 역할 관리
-                ListTile(
-                  leading: const Icon(Icons.admin_panel_settings_outlined),
-                  title: const Text('멤버 역할 관리'),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () {
-                    Navigator.pop(context);
-                    _showMemberRolesSheet(context, room);
-                  },
-                ),
-
-                const SizedBox(height: 16),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton(
-                      onPressed: () async {
-                        final roomProvider = context.read<RoomProvider>();
-                        await roomProvider.updateRoom(
-                          room.id,
-                          name: nameController.text.trim(),
-                        );
-                        if (context.mounted) {
-                          Navigator.pop(context);
-                        }
-                      },
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.ink,
-                        foregroundColor: AppColors.paper,
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Padding(
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(context).viewInsets.bottom,
+              ),
+              child: SafeArea(
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 40,
+                        height: 4,
+                        margin: const EdgeInsets.symmetric(vertical: 12),
+                        decoration: BoxDecoration(
+                          color: AppColors.border,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
                       ),
-                      child: const Text('저장'),
-                    ),
+                      const Padding(
+                        padding: EdgeInsets.all(16),
+                        child: Text(
+                          '채팅방 설정',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: TextField(
+                          controller: nameController,
+                          decoration: const InputDecoration(
+                            labelText: '채팅방 이름',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+
+                      // 역할 관리
+                      ListTile(
+                        leading: const Icon(Icons.admin_panel_settings_outlined),
+                        title: const Text('멤버 역할 관리'),
+                        trailing: const Icon(Icons.chevron_right),
+                        onTap: () {
+                          Navigator.pop(context);
+                          _showMemberRolesSheet(context, room);
+                        },
+                      ),
+
+                      // 방장 설정 (owner, admin만)
+                      if (isHost) ...[
+                        const Divider(height: 24),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          child: Row(
+                            children: [
+                              Icon(Icons.settings_outlined, size: 20, color: AppColors.gold),
+                              const SizedBox(width: 8),
+                              const Text(
+                                '방장 설정',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        SwitchListTile(
+                          title: const Text('내보내기 허용'),
+                          subtitle: const Text('멤버가 캔버스를 이미지/PDF로 내보낼 수 있음'),
+                          value: exportAllowed,
+                          activeColor: AppColors.gold,
+                          onChanged: (v) => setModalState(() => exportAllowed = v),
+                        ),
+                        SwitchListTile(
+                          title: const Text('워터마크 강제'),
+                          subtitle: const Text('내보내기 시 워터마크를 반드시 포함'),
+                          value: watermarkForced,
+                          activeColor: AppColors.gold,
+                          onChanged: (v) => setModalState(() => watermarkForced = v),
+                        ),
+                        SwitchListTile(
+                          title: const Text('로그 공개'),
+                          subtitle: const Text('시간순 로그(타임라인)를 멤버에게 공개'),
+                          value: logPublic,
+                          activeColor: AppColors.gold,
+                          onChanged: (v) => setModalState(() => logPublic = v),
+                        ),
+                        SwitchListTile(
+                          title: const Text('도형 수정 허용'),
+                          subtitle: const Text('멤버가 도형을 추가·수정·삭제할 수 있음'),
+                          value: canEditShapes,
+                          activeColor: AppColors.gold,
+                          onChanged: (v) => setModalState(() => canEditShapes = v),
+                        ),
+                      ],
+
+                      const SizedBox(height: 16),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton(
+                            onPressed: () async {
+                              final roomProvider = context.read<RoomProvider>();
+                              await roomProvider.updateRoom(
+                                room.id,
+                                name: nameController.text.trim(),
+                                exportAllowed: isHost ? exportAllowed : null,
+                                watermarkForced: isHost ? watermarkForced : null,
+                                logPublic: isHost ? logPublic : null,
+                                canEditShapes: isHost ? canEditShapes : null,
+                              );
+                              if (context.mounted) {
+                                Navigator.pop(context);
+                              }
+                            },
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppColors.ink,
+                              foregroundColor: AppColors.paper,
+                            ),
+                            child: const Text('저장'),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+                    ],
                   ),
                 ),
-                const SizedBox(height: 16),
-              ],
-            ),
-          ),
+              ),
+            );
+          },
         );
       },
     );

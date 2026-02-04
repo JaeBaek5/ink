@@ -46,4 +46,37 @@ class AuthService {
     await _googleSignIn.signOut();
     await _auth.signOut();
   }
+
+  /// 계정 삭제 (탈퇴). Google 로그인 사용자: 재인증 후 삭제
+  Future<void> deleteAccount() async {
+    final user = _auth.currentUser;
+    if (user == null) return;
+
+    // 최근 로그인이 아니면 재인증 필요
+    try {
+      final googleUser = await _googleSignIn.signInSilently();
+      if (googleUser != null) {
+        final googleAuth = await googleUser.authentication;
+        final credential = GoogleAuthProvider.credential(
+          accessToken: googleAuth.accessToken,
+          idToken: googleAuth.idToken,
+        );
+        await user.reauthenticateWithCredential(credential);
+      }
+    } catch (_) {
+      // 재인증 실패 시 사용자에게 Google 로그인 다시 요청
+      final googleUser = await _googleSignIn.signIn();
+      if (googleUser == null) throw Exception('재인증이 필요합니다.');
+      final googleAuth = await googleUser.authentication;
+      final credential = GoogleAuthProvider.credential(
+        accessToken: googleAuth.accessToken,
+        idToken: googleAuth.idToken,
+      );
+      await user.reauthenticateWithCredential(credential);
+    }
+
+    await user.delete();
+    await _googleSignIn.signOut();
+    await _auth.signOut();
+  }
 }

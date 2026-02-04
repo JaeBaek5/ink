@@ -360,6 +360,18 @@ class _TagsTabState extends State<TagsTab> {
       final room = await _getRoomById(tag.roomId);
       if (room != null && mounted) {
         // 캔버스 화면으로 이동
+        final highlightTagArea = tag.areaX != null &&
+                tag.areaY != null &&
+                tag.areaWidth != null &&
+                tag.areaHeight != null
+            ? Rect.fromLTWH(
+                tag.areaX!,
+                tag.areaY!,
+                tag.areaWidth!,
+                tag.areaHeight!,
+              )
+            : null;
+
         Navigator.push(
           context,
           MaterialPageRoute(
@@ -368,6 +380,7 @@ class _TagsTabState extends State<TagsTab> {
               jumpToPosition: tag.areaX != null && tag.areaY != null
                   ? Offset(tag.areaX!, tag.areaY!)
                   : null,
+              highlightTagArea: highlightTagArea,
             ),
           ),
         );

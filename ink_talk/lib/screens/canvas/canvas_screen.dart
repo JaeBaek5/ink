@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/constants/app_colors.dart';
@@ -5,19 +6,24 @@ import '../../models/room_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/room_provider.dart';
 import '../../services/export_service.dart';
+import '../../services/network_connectivity_service.dart';
 import '../../widgets/canvas/drawing_canvas.dart';
 import '../../widgets/canvas/pen_toolbar.dart';
+import '../../services/settings_service.dart';
+import '../../widgets/room/room_host_settings_sheet.dart';
 import 'canvas_controller.dart';
 
 /// 캔버스(채팅방) 화면
 class CanvasScreen extends StatefulWidget {
   final RoomModel room;
   final Offset? jumpToPosition; // 태그 원본 점프용
+  final Rect? highlightTagArea; // 태그 영역 하이라이트 (원본 점프 시)
 
   const CanvasScreen({
     super.key,
     required this.room,
     this.jumpToPosition,
+    this.highlightTagArea,
   });
 
   @override
@@ -27,7 +33,16 @@ class CanvasScreen extends StatefulWidget {
 class _CanvasScreenState extends State<CanvasScreen> {
   late CanvasController _canvasController;
   final TextEditingController _quickTextController = TextEditingController();
+  final GlobalKey _canvasRepaintKey = GlobalKey();
   bool _isInitialized = false;
+  Rect? _highlightTagArea; // 3초 후 자동 해제
+  void _onNetworkChanged() {
+    if (!mounted) return;
+    final net = context.read<NetworkConnectivityService>();
+    if (net.isOnline && _canvasController.hasPendingQueue) {
+      _canvasController.retryPendingStrokes();
+    }
+  }
 
   @override
   void initState() {
@@ -42,14 +57,19 @@ class _CanvasScreenState extends State<CanvasScreen> {
       final authProvider = context.read<AuthProvider>();
       final userId = authProvider.user?.uid;
       final userName = authProvider.user?.displayName;
-      
+
       if (userId != null) {
+        final expandMode = widget.room.canvasExpandMode == 'free'
+            ? CanvasExpandMode.free
+            : CanvasExpandMode.rectangular;
         _canvasController.initialize(
           widget.room.id,
           userId,
           userName: userName,
+          canvasExpandMode: expandMode,
         );
         _isInitialized = true;
+        context.read<NetworkConnectivityService>().addListener(_onNetworkChanged);
 
         // 태그 원본 점프
         if (widget.jumpToPosition != null) {
@@ -58,12 +78,22 @@ class _CanvasScreenState extends State<CanvasScreen> {
             _canvasController.jumpToPosition(widget.jumpToPosition!, size);
           });
         }
+        // 태그 영역 하이라이트 (3초 후 해제)
+        if (widget.highlightTagArea != null) {
+          setState(() => _highlightTagArea = widget.highlightTagArea);
+          Future.delayed(const Duration(seconds: 3), () {
+            if (mounted) setState(() => _highlightTagArea = null);
+          });
+        }
       }
     }
   }
 
   @override
   void dispose() {
+    try {
+      context.read<NetworkConnectivityService>().removeListener(_onNetworkChanged);
+    } catch (_) {}
     _canvasController.dispose();
     _quickTextController.dispose();
     super.dispose();
@@ -73,15 +103,50 @@ class _CanvasScreenState extends State<CanvasScreen> {
   Widget build(BuildContext context) {
     final authProvider = context.watch<AuthProvider>();
     final roomProvider = context.watch<RoomProvider>();
+    final network = context.watch<NetworkConnectivityService>();
     final userId = authProvider.user?.uid ?? '';
+
+    // 사진/영상 업로드 시 스낵바 안내
+    _canvasController.uploadMessageCallback = (message) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
+        );
+      }
+    };
 
     return Scaffold(
       backgroundColor: AppColors.paper,
       appBar: AppBar(
         backgroundColor: AppColors.paper,
-        title: Text(
-          roomProvider.getRoomDisplayName(widget.room, userId),
-          style: const TextStyle(fontSize: 16),
+        title: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              roomProvider.getRoomDisplayName(widget.room, userId),
+              style: const TextStyle(fontSize: 16),
+            ),
+            ListenableBuilder(
+              listenable: _canvasController,
+              builder: (context, _) {
+                final sending = _canvasController.sendingStrokesCount;
+                final uploading = _canvasController.isUploading;
+                if (sending == 0 && !uploading) return const SizedBox.shrink();
+                return Text(
+                  sending > 0 && uploading
+                      ? '전송 중 ${sending}건 · 업로드 중'
+                      : sending > 0
+                          ? '전송 중 ${sending}건'
+                          : '업로드 중',
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: AppColors.mutedGray,
+                  ),
+                );
+              },
+            ),
+          ],
         ),
         actions: [
           // 멤버 수
@@ -121,14 +186,79 @@ class _CanvasScreenState extends State<CanvasScreen> {
       ),
       body: Stack(
         children: [
+          // 재연결 중 배너 / 대기열
+          if (!network.isOnline || _canvasController.hasPendingQueue)
+            Positioned(
+              left: 0,
+              right: 0,
+              top: 0,
+              child: Material(
+                color: !network.isOnline
+                    ? Colors.orange.shade700
+                    : AppColors.ink.withValues(alpha: 0.9),
+                child: SafeArea(
+                  bottom: false,
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 8,
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          !network.isOnline
+                              ? Icons.wifi_off
+                              : Icons.schedule,
+                          color: Colors.white,
+                          size: 20,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            !network.isOnline
+                                ? '네트워크 연결이 불안정합니다. 재연결 중...'
+                                : '대기열 ${_canvasController.pendingQueueCount}건 전송 대기',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                        if (network.isOnline &&
+                            _canvasController.hasPendingQueue)
+                          TextButton(
+                            onPressed: () {
+                              _canvasController.retryPendingStrokes();
+                            },
+                            child: const Text(
+                              '재시도',
+                              style: TextStyle(color: Colors.white),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+
           Column(
             children: [
+              ListenableBuilder(
+                listenable: _canvasController,
+                builder: (_, __) {
+                  final showBanner =
+                      !network.isOnline || _canvasController.hasPendingQueue;
+                  return SizedBox(height: showBanner ? 52 : 0);
+                },
+              ),
               // 펜 툴바 (상단 중앙)
               ListenableBuilder(
                 listenable: _canvasController,
                 builder: (context, _) {
                   return PenToolbar(
                     controller: _canvasController,
+                    canEditShapes: widget.room.canEditShapes,
                   );
                 },
               ),
@@ -142,6 +272,9 @@ class _CanvasScreenState extends State<CanvasScreen> {
                       controller: _canvasController,
                       userId: userId,
                       roomId: widget.room.id,
+                      logPublic: widget.room.logPublic,
+                      repaintBoundaryKey: _canvasRepaintKey,
+                      highlightTagArea: _highlightTagArea,
                     );
                   },
                 ),
@@ -159,8 +292,82 @@ class _CanvasScreenState extends State<CanvasScreen> {
               return const SizedBox.shrink();
             },
           ),
+
+          // 확대/축소 비율 조절 (좌측 하단, 빠른 텍스트 시에는 숨김)
+          Positioned(
+            left: 16,
+            bottom: 16,
+            child: ListenableBuilder(
+              listenable: _canvasController,
+              builder: (context, _) {
+                if (_canvasController.inputMode == InputMode.quickText) {
+                  return const SizedBox.shrink();
+                }
+                return _buildZoomControl(context);
+              },
+            ),
+          ),
         ],
       ),
+    );
+  }
+
+  /// 좌측 하단 확대/축소 버튼 (- 100% +)
+  Widget _buildZoomControl(BuildContext context) {
+    final size = MediaQuery.sizeOf(context);
+    final viewportCenter = Offset(size.width / 2, size.height / 2);
+
+    return ListenableBuilder(
+      listenable: _canvasController,
+      builder: (context, _) {
+        final scalePercent = (_canvasController.canvasScale * 100).round();
+        return Material(
+          color: AppColors.paper,
+          borderRadius: BorderRadius.circular(24),
+          elevation: 2,
+          shadowColor: Colors.black26,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                IconButton(
+                  icon: const Icon(Icons.remove, color: AppColors.ink),
+                  onPressed: _canvasController.canvasScale <= 0.1
+                      ? null
+                      : () => _canvasController.zoomOut(viewportCenter),
+                  tooltip: '축소',
+                  style: IconButton.styleFrom(
+                    minimumSize: const Size(40, 40),
+                  ),
+                ),
+                SizedBox(
+                  width: 52,
+                  child: Text(
+                    '$scalePercent%',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.ink,
+                    ),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.add, color: AppColors.ink),
+                  onPressed: _canvasController.canvasScale >= 5.0
+                      ? null
+                      : () => _canvasController.zoomIn(viewportCenter),
+                  tooltip: '확대',
+                  style: IconButton.styleFrom(
+                    minimumSize: const Size(40, 40),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -263,7 +470,7 @@ class _CanvasScreenState extends State<CanvasScreen> {
                 title: const Text('채팅방 설정'),
                 onTap: () {
                   Navigator.pop(context);
-                  // TODO: 설정
+                  showRoomHostSettingsSheet(context, widget.room);
                 },
               ),
               ListTile(
@@ -271,6 +478,15 @@ class _CanvasScreenState extends State<CanvasScreen> {
                 title: const Text('내보내기'),
                 onTap: () {
                   Navigator.pop(context);
+                  if (!widget.room.exportAllowed) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('방장이 내보내기를 제한했습니다.'),
+                        backgroundColor: Colors.orange,
+                      ),
+                    );
+                    return;
+                  }
                   _showExportDialog();
                 },
               ),
@@ -304,6 +520,7 @@ class _CanvasScreenState extends State<CanvasScreen> {
   void _showExportDialog() {
     final authProvider = context.read<AuthProvider>();
     ExportFormat selectedFormat = ExportFormat.png;
+    final watermarkForced = widget.room.watermarkForced;
     bool includeWatermark = true;
 
     showDialog(
@@ -347,12 +564,14 @@ class _CanvasScreenState extends State<CanvasScreen> {
                   CheckboxListTile(
                     title: const Text('워터마크 포함'),
                     subtitle: Text(
-                      '${authProvider.user?.displayName ?? '사용자'} · INK',
+                      watermarkForced
+                          ? '방장이 워터마크를 필수로 설정했습니다 · ${authProvider.user?.displayName ?? '사용자'} · INK'
+                          : '${authProvider.user?.displayName ?? '사용자'} · INK',
                       style: const TextStyle(fontSize: 12, color: AppColors.mutedGray),
                     ),
                     value: includeWatermark,
                     activeColor: AppColors.gold,
-                    onChanged: (value) => setState(() => includeWatermark = value ?? true),
+                    onChanged: watermarkForced ? null : (value) => setState(() => includeWatermark = value ?? true),
                     contentPadding: EdgeInsets.zero,
                   ),
                 ],
@@ -365,7 +584,8 @@ class _CanvasScreenState extends State<CanvasScreen> {
                 ElevatedButton(
                   onPressed: () {
                     Navigator.pop(context);
-                    _exportCanvas(selectedFormat, includeWatermark);
+                    final useWatermark = widget.room.watermarkForced || includeWatermark;
+                    _exportCanvas(selectedFormat, useWatermark);
                   },
                   style: ElevatedButton.styleFrom(
                     backgroundColor: AppColors.gold,
@@ -381,13 +601,11 @@ class _CanvasScreenState extends State<CanvasScreen> {
     );
   }
 
-  /// 캔버스 내보내기 실행
+  /// 캔버스 내보내기 실행 (실제 캔버스 캡처)
   void _exportCanvas(ExportFormat format, bool includeWatermark) async {
-    // TODO: 실제 캔버스 캡처 구현 시 사용
-    // final authProvider = context.read<AuthProvider>();
-    // final exportService = ExportService();
+    final authProvider = context.read<AuthProvider>();
+    final exportService = ExportService();
 
-    // 로딩 표시
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -397,17 +615,63 @@ class _CanvasScreenState extends State<CanvasScreen> {
     );
 
     try {
-      // 캔버스 캡처 (TODO: 실제 캔버스 캡처 구현 필요)
-      // 현재는 데모용 메시지
-      await Future.delayed(const Duration(seconds: 1));
+      final imageData = await exportService.captureCanvas(_canvasRepaintKey);
+      if (!mounted) return;
+      Navigator.pop(context);
 
-      if (mounted) {
-        Navigator.pop(context); // 로딩 닫기
-        
+      if (imageData == null || imageData.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('캔버스 캡처에 실패했습니다.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+
+      final fileName = 'ink_${DateTime.now().millisecondsSinceEpoch}';
+      final watermarkText = includeWatermark
+          ? '${authProvider.user?.displayName ?? '사용자'} · INK'
+          : null;
+
+      File? file;
+      switch (format) {
+        case ExportFormat.png:
+          file = await exportService.exportToPng(
+            imageData: imageData,
+            fileName: fileName,
+            watermarkText: watermarkText,
+          );
+          break;
+        case ExportFormat.jpg:
+          file = await exportService.exportToJpg(
+            imageData: imageData,
+            fileName: fileName,
+            watermarkText: watermarkText,
+          );
+          break;
+        case ExportFormat.pdf:
+          file = await exportService.exportToPdf(
+            imageData: imageData,
+            fileName: fileName,
+            watermarkText: watermarkText,
+          );
+          break;
+      }
+
+      if (mounted && file != null) {
+        await exportService.shareFile(file, subject: 'INK 캔버스');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('${format.name.toUpperCase()} 형식으로 내보내기 준비 중...'),
+            content: Text('${format.name.toUpperCase()}로 내보내기 완료'),
             backgroundColor: AppColors.gold,
+          ),
+        );
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('내보내기 실패'),
+            backgroundColor: Colors.red,
           ),
         );
       }
@@ -415,8 +679,8 @@ class _CanvasScreenState extends State<CanvasScreen> {
       if (mounted) {
         Navigator.pop(context);
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('내보내기 실패'),
+          SnackBar(
+            content: Text('내보내기 실패: $e'),
             backgroundColor: Colors.red,
           ),
         );
