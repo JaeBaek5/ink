@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -14,9 +15,23 @@ class MediaWidget extends StatefulWidget {
   final double canvasScale;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
+  /// 누르기 시작 시 (3초 길게 누르기 타이머 등용)
+  final VoidCallback? onTapDown;
+  /// 손을 뗐을 때
+  final VoidCallback? onTapUp;
+  /// 제스처 취소 시
+  final VoidCallback? onTapCancel;
   final Function(Offset) onMove;
   /// (width, height, [x, y]) — 왼쪽/위쪽 핸들일 때 x,y 전달
   final void Function(double width, double height, {double? x, double? y})? onResize;
+  /// 크기 조정 핸들 드래그를 끝냈을 때 (핸들 숨기기용)
+  final VoidCallback? onResizeEnd;
+  /// 회전 (도 단위, 오브젝트 중심 기준)
+  final void Function(double angleDegrees)? onRotate;
+  /// 기울이기 (도 단위, skewX, skewY)
+  final void Function(double skewXDegrees, double skewYDegrees)? onSkew;
+  /// true면 포인터 이벤트 무시(캔버스로 통과) — 펜/지우개 모드에서 사진 위 그리기·떨림 방지
+  final bool ignorePointer;
 
   const MediaWidget({
     super.key,
@@ -27,32 +42,26 @@ class MediaWidget extends StatefulWidget {
     required this.canvasScale,
     required this.onTap,
     required this.onLongPress,
+    this.onTapDown,
+    this.onTapUp,
+    this.onTapCancel,
     required this.onMove,
     this.onResize,
+    this.onResizeEnd,
+    this.onRotate,
+    this.onSkew,
+    this.ignorePointer = false,
   });
 
   @override
   State<MediaWidget> createState() => _MediaWidgetState();
 }
 
-/// 크기 조정 핸들 위치
-enum _ResizeHandle { none, top, bottom, left, right, topLeft, topRight, bottomLeft, bottomRight }
-
 class _MediaWidgetState extends State<MediaWidget> {
   VideoPlayerController? _videoController;
   bool _isPlaying = false;
   bool _videoLoaded = false;
   int _currentPdfPage = 1;
-  Offset? _dragStart;
-  _ResizeHandle _resizeHandle = _ResizeHandle.none;
-  double _resizeStartWidth = 0;
-  double _resizeStartHeight = 0;
-  double _resizeStartX = 0;
-  double _resizeStartY = 0;
-
-  static const double _handleSize = 14.0;
-  static const double _minSize = 48.0;
-
   void _initVideoController() {
     if (_videoController != null) return;
     _videoController = VideoPlayerController.networkUrl(Uri.parse(widget.media.url))
@@ -79,175 +88,86 @@ class _MediaWidgetState extends State<MediaWidget> {
     final width = widget.media.width * widget.canvasScale;
     final height = widget.media.height * widget.canvasScale;
     final locked = widget.media.isLocked;
-    final showResize = widget.isResizeMode && !locked && widget.onResize != null;
+    final angleRad = widget.media.angleDegrees * math.pi / 180;
+    final skewXRad = math.tan(widget.media.skewXDegrees * math.pi / 180);
+    final skewYRad = math.tan(widget.media.skewYDegrees * math.pi / 180);
+    final skewTransform = Matrix4.identity()
+      ..setEntry(0, 1, skewXRad)
+      ..setEntry(1, 0, skewYRad);
+    final flipTransform = Matrix4.diagonal3Values(
+      widget.media.flipHorizontal ? -1.0 : 1.0,
+      widget.media.flipVertical ? -1.0 : 1.0,
+      1.0,
+    );
 
     return Positioned(
       left: x,
       top: y,
-      child: Stack(
-        clipBehavior: Clip.none,
-        children: [
-          GestureDetector(
+      child: Transform.rotate(
+        angle: angleRad,
+        alignment: Alignment.center,
+        child: SizedBox(
+          width: width,
+          height: height,
+          child: IgnorePointer(
+            ignoring: widget.ignorePointer,
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                GestureDetector(
             onTap: widget.onTap,
             onLongPress: widget.onLongPress,
-            onPanStart: (details) {
-              if (showResize) {
-                _resizeHandle = _hitTestHandle(details.localPosition, width, height);
-                if (_resizeHandle != _ResizeHandle.none) {
-                  _resizeStartWidth = widget.media.width;
-                  _resizeStartHeight = widget.media.height;
-                  _resizeStartX = widget.media.x;
-                  _resizeStartY = widget.media.y;
-                  return;
-                }
-              }
-              if (!locked) _dragStart = details.localPosition;
-            },
-            onPanUpdate: (details) {
-              if (_resizeHandle != _ResizeHandle.none) {
-                final deltaCanvas = Offset(
-                  details.delta.dx / widget.canvasScale,
-                  details.delta.dy / widget.canvasScale,
-                );
-                double w = _resizeStartWidth;
-                double h = _resizeStartHeight;
-                double? newX;
-                double? newY;
-                switch (_resizeHandle) {
-                  case _ResizeHandle.bottomRight:
-                    w = (w + deltaCanvas.dx).clamp(_minSize, double.infinity);
-                    h = (h + deltaCanvas.dy).clamp(_minSize, double.infinity);
-                    break;
-                  case _ResizeHandle.bottomLeft:
-                    w = (w - deltaCanvas.dx).clamp(_minSize, double.infinity);
-                    h = (h + deltaCanvas.dy).clamp(_minSize, double.infinity);
-                    newX = _resizeStartX + (_resizeStartWidth - w);
-                    break;
-                  case _ResizeHandle.topRight:
-                    w = (w + deltaCanvas.dx).clamp(_minSize, double.infinity);
-                    h = (h - deltaCanvas.dy).clamp(_minSize, double.infinity);
-                    newY = _resizeStartY + (_resizeStartHeight - h);
-                    break;
-                  case _ResizeHandle.topLeft:
-                    w = (w - deltaCanvas.dx).clamp(_minSize, double.infinity);
-                    h = (h - deltaCanvas.dy).clamp(_minSize, double.infinity);
-                    newX = _resizeStartX + (_resizeStartWidth - w);
-                    newY = _resizeStartY + (_resizeStartHeight - h);
-                    break;
-                  case _ResizeHandle.right:
-                    w = (w + deltaCanvas.dx).clamp(_minSize, double.infinity);
-                    break;
-                  case _ResizeHandle.left:
-                    w = (w - deltaCanvas.dx).clamp(_minSize, double.infinity);
-                    newX = _resizeStartX + (_resizeStartWidth - w);
-                    break;
-                  case _ResizeHandle.bottom:
-                    h = (h + deltaCanvas.dy).clamp(_minSize, double.infinity);
-                    break;
-                  case _ResizeHandle.top:
-                    h = (h - deltaCanvas.dy).clamp(_minSize, double.infinity);
-                    newY = _resizeStartY + (_resizeStartHeight - h);
-                    break;
-                  case _ResizeHandle.none:
-                    break;
-                }
-                widget.onResize?.call(w, h, x: newX, y: newY);
-                _resizeStartWidth = w;
-                _resizeStartHeight = h;
-                return;
-              }
-              if (!locked && _dragStart != null) {
-                final delta = details.localPosition - _dragStart!;
-                widget.onMove(Offset(
-                  delta.dx / widget.canvasScale,
-                  delta.dy / widget.canvasScale,
-                ));
-                _dragStart = details.localPosition;
-              }
-            },
-            onPanEnd: (_) {
-              _dragStart = null;
-              _resizeHandle = _ResizeHandle.none;
-            },
-            child: Opacity(
-              opacity: widget.media.opacity,
-              child: Container(
-                width: width,
-                height: height,
-                decoration: BoxDecoration(
-                  border: widget.isSelected
-                      ? Border.all(
-                          color: locked ? AppColors.mutedGray : AppColors.gold,
-                          width: 2,
-                        )
-                      : null,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Stack(
-                  children: [
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(6),
-                      child: _buildMediaContent(),
-                    ),
-                    if (locked)
-                      Positioned(
-                        right: 6,
-                        top: 6,
-                        child: Icon(Icons.lock, size: 20, color: AppColors.gold),
+            onTapDown: widget.onTapDown != null ? (_) => widget.onTapDown!() : null,
+            onTapUp: widget.onTapUp != null ? (_) => widget.onTapUp!() : null,
+            onTapCancel: widget.onTapCancel != null ? () => widget.onTapCancel!() : null,
+            // 본체 이동은 상위 단일 제스처 라우터에서 처리 (onPan 제거 → 경쟁 제거, S노트 스타일)
+            child: Transform(
+              alignment: Alignment.center,
+              transform: skewTransform,
+              child: Transform(
+                alignment: Alignment.center,
+                transform: flipTransform,
+                child: Opacity(
+                opacity: widget.media.opacity,
+                child: Container(
+                  width: width,
+                  height: height,
+                  decoration: BoxDecoration(
+                    border: widget.isSelected
+                        ? Border.all(
+                            color: locked ? AppColors.mutedGray : AppColors.mediaActive,
+                            width: 2,
+                          )
+                        : null,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Stack(
+                    children: [
+                      Positioned.fill(
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(6),
+                          child: _buildMediaContent(),
+                        ),
                       ),
-                  ],
+                      if (locked)
+                        Positioned(
+                          right: 6,
+                          top: 6,
+                          child: Icon(Icons.lock, size: 20, color: AppColors.gold),
+                        ),
+                    ],
+                  ),
                 ),
               ),
             ),
-          ),
-          if (showResize) ..._buildResizeHandles(width, height),
-        ],
-      ),
-    );
-  }
-
-  _ResizeHandle _hitTestHandle(Offset local, double w, double h) {
-    if (local.dx <= _handleSize && local.dy <= _handleSize) return _ResizeHandle.topLeft;
-    if (local.dx >= w - _handleSize && local.dy <= _handleSize) return _ResizeHandle.topRight;
-    if (local.dx <= _handleSize && local.dy >= h - _handleSize) return _ResizeHandle.bottomLeft;
-    if (local.dx >= w - _handleSize && local.dy >= h - _handleSize) return _ResizeHandle.bottomRight;
-    if (local.dx <= _handleSize) return _ResizeHandle.left;
-    if (local.dx >= w - _handleSize) return _ResizeHandle.right;
-    if (local.dy <= _handleSize) return _ResizeHandle.top;
-    if (local.dy >= h - _handleSize) return _ResizeHandle.bottom;
-    return _ResizeHandle.none;
-  }
-
-  List<Widget> _buildResizeHandles(double width, double height) {
-    final handles = <Widget>[];
-    final positions = [
-      [_ResizeHandle.topLeft, 0.0, 0.0],
-      [_ResizeHandle.topRight, width - _handleSize, 0.0],
-      [_ResizeHandle.bottomLeft, 0.0, height - _handleSize],
-      [_ResizeHandle.bottomRight, width - _handleSize, height - _handleSize],
-      [_ResizeHandle.top, width / 2 - _handleSize / 2, 0.0],
-      [_ResizeHandle.bottom, width / 2 - _handleSize / 2, height - _handleSize],
-      [_ResizeHandle.left, 0.0, height / 2 - _handleSize / 2],
-      [_ResizeHandle.right, width - _handleSize, height / 2 - _handleSize / 2],
-    ];
-    for (final p in positions) {
-      handles.add(
-        Positioned(
-          left: (p[1] as double),
-          top: (p[2] as double),
-          child: Container(
-            width: _handleSize,
-            height: _handleSize,
-            decoration: BoxDecoration(
-              color: AppColors.paper,
-              border: Border.all(color: AppColors.gold, width: 1.5),
-              borderRadius: BorderRadius.circular(4),
             ),
           ),
+        ],
         ),
-      );
-    }
-    return handles;
+          ),
+        ),
+      ),
+    );
   }
 
   Widget _buildMediaContent() {
@@ -261,14 +181,15 @@ class _MediaWidgetState extends State<MediaWidget> {
     }
   }
 
-  /// 썸네일 우선 로딩 후 원본 (캐시 사용)
+  /// 썸네일 우선 로딩 후 원본 (캐시 사용). 크기 변경 시 리빌드되어 박스에 맞게 채움.
   Widget _buildImageContent() {
     final thumbnailUrl = widget.media.thumbnailUrl;
     final imageUrl = widget.media.url;
 
     return CachedNetworkImage(
+      key: ValueKey('img_${widget.media.id}_${widget.media.width}_${widget.media.height}'),
       imageUrl: imageUrl,
-      fit: BoxFit.cover,
+      fit: BoxFit.fill,
       memCacheWidth: thumbnailUrl != null ? 400 : null,
       memCacheHeight: thumbnailUrl != null ? 400 : null,
       placeholder: (context, url) => Container(
@@ -276,7 +197,7 @@ class _MediaWidgetState extends State<MediaWidget> {
         child: thumbnailUrl != null
             ? CachedNetworkImage(
                 imageUrl: thumbnailUrl,
-                fit: BoxFit.cover,
+                fit: BoxFit.fill,
                 placeholder: (_, __) => const Center(
                   child: CircularProgressIndicator(color: AppColors.gold),
                 ),

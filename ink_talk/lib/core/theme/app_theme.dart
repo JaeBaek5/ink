@@ -18,6 +18,7 @@ class AppTheme {
       onPrimary: AppColors.paper,
       onSecondary: AppColors.paper,
       onSurface: AppColors.ink,
+      onSurfaceVariant: AppColors.mutedGray,
     ),
     
     // 배경색
@@ -89,6 +90,7 @@ class AppTheme {
       onPrimary: AppColors.darkBackground,
       onSecondary: AppColors.darkBackground,
       onSurface: AppColors.darkText,
+      onSurfaceVariant: AppColors.darkMuted,
     ),
     
     scaffoldBackgroundColor: AppColors.darkBackground,

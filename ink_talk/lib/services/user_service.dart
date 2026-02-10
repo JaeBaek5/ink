@@ -63,6 +63,25 @@ class UserService {
     return UserModel.fromFirestore(query.docs.first);
   }
 
+  /// ID 중복 검사: 사용 가능하면 true (비어 있거나 본인만 사용 중일 때)
+  Future<bool> checkVisibleIdAvailable(String visibleId, {String? excludeUid}) async {
+    if (visibleId.trim().isEmpty) return false;
+    final existing = await getUserByVisibleId(visibleId.trim());
+    if (existing == null) return true;
+    if (excludeUid != null && existing.uid == excludeUid) return true;
+    return false;
+  }
+
+  /// 사용 가능한 랜덤 ID 생성 (중복 검사 후 반환, 최대 10회 시도)
+  Future<String> generateAvailableVisibleId() async {
+    for (var i = 0; i < 10; i++) {
+      final candidate = _generateVisibleId();
+      final available = await checkVisibleIdAvailable(candidate);
+      if (available) return candidate;
+    }
+    return _generateVisibleId();
+  }
+
   /// 사용자 검색 (이름/ID)
   Future<List<UserModel>> searchUsers(String query) async {
     if (query.isEmpty) return [];

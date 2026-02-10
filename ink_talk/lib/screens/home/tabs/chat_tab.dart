@@ -18,27 +18,32 @@ class ChatTab extends StatefulWidget {
 }
 
 class _ChatTabState extends State<ChatTab> {
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final authProvider = context.read<AuthProvider>();
-      if (authProvider.user != null) {
-        context.read<RoomProvider>().initialize(authProvider.user!.uid);
-      }
-    });
-  }
+  /// true: 목록형, false: 2열 정사각형 박스형(마지막 손글씨 보기)
+  bool _isListView = true;
 
   @override
   Widget build(BuildContext context) {
     final authProvider = context.watch<AuthProvider>();
     final roomProvider = context.watch<RoomProvider>();
     final userId = authProvider.user?.uid ?? '';
+    final colorScheme = Theme.of(context).colorScheme;
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('채팅 ${roomProvider.roomCount > 0 ? "(${roomProvider.roomCount})" : ""}'),
+        title: Text(
+          roomProvider.roomCount > 0
+              ? '채팅 ${roomProvider.roomCount}'
+              : '채팅',
+        ),
         actions: [
+          IconButton(
+            icon: Icon(
+              _isListView ? Icons.grid_view : Icons.view_list,
+              color: colorScheme.onSurface,
+            ),
+            tooltip: _isListView ? '박스형 보기' : '목록형 보기',
+            onPressed: () => setState(() => _isListView = !_isListView),
+          ),
           IconButton(
             icon: const Icon(Icons.search),
             onPressed: () => _showSearchDialog(context),
@@ -53,40 +58,320 @@ class _ChatTabState extends State<ChatTab> {
       body: RefreshIndicator(
         onRefresh: () async {
           if (authProvider.user != null) {
-            roomProvider.initialize(authProvider.user!.uid);
+            await roomProvider.initialize(authProvider.user!.uid);
           }
         },
-        child: roomProvider.rooms.isEmpty
-            ? _buildEmptyChatList()
-            : _buildChatList(roomProvider, userId),
+        child: _buildScrollableBody(roomProvider, userId),
       ),
     );
   }
 
+  /// RefreshIndicator는 스크롤 가능한 자식이 필요함. 빈 목록일 때도 스크롤 가능하게.
+  Widget _buildScrollableBody(RoomProvider roomProvider, String userId) {
+    final displayRooms = roomProvider.rooms
+        .where((r) => r.name != '테스트용 채팅방')
+        .toList();
+    if (displayRooms.isEmpty) {
+      return SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        child: SizedBox(
+          height: MediaQuery.of(context).size.height - 150,
+          child: _buildEmptyChatList(),
+        ),
+      );
+    }
+    if (_isListView) {
+      return ListView.builder(
+        physics: const AlwaysScrollableScrollPhysics(),
+        itemCount: displayRooms.length,
+        itemBuilder: (context, index) {
+          final room = displayRooms[index];
+          return PuzzleCard(
+            room: room,
+            displayName: roomProvider.getRoomDisplayName(room, userId),
+            displayImage: roomProvider.getRoomDisplayImage(room, userId),
+            currentUserId: userId,
+            onTap: () => _openRoom(room),
+            onLongPress: () => _showRoomOptionsSheet(context, room, userId),
+          );
+        },
+      );
+    }
+    return GridView.builder(
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        childAspectRatio: 1,
+        crossAxisSpacing: 12,
+        mainAxisSpacing: 12,
+      ),
+      itemCount: displayRooms.length,
+      itemBuilder: (context, index) {
+        final room = displayRooms[index];
+        return _buildChatGridTile(
+          context,
+          room,
+          roomProvider.getRoomDisplayName(room, userId),
+          roomProvider.getRoomDisplayImage(room, userId),
+          userId,
+          () => _openRoom(room),
+          () => _showRoomOptionsSheet(context, room, userId),
+        );
+      },
+    );
+  }
+
+  /// 2열 박스형: 위쪽 채팅방 이름·프로필, 아래쪽 마지막 손글씨 영역(여백·중앙 정렬)
+  Widget _buildChatGridTile(
+    BuildContext context,
+    RoomModel room,
+    String displayName,
+    String? displayImage,
+    String currentUserId,
+    VoidCallback onTap,
+    VoidCallback onLongPress,
+  ) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final unreadCount = room.members[currentUserId]?.unreadCount ?? 0;
+    final lastType = room.lastEventType;
+    final lastUrl = room.lastEventUrl;
+    final lastPreview = room.lastEventPreview;
+
+    return Card(
+      elevation: 0,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: BorderSide(color: colorScheme.outline),
+      ),
+      child: InkWell(
+        onTap: onTap,
+        onLongPress: onLongPress,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // 위쪽: 채팅방 이름 + 프로필 사진
+              Row(
+                children: [
+                  CircleAvatar(
+                    radius: 18,
+                    backgroundImage:
+                        displayImage != null ? NetworkImage(displayImage) : null,
+                    backgroundColor: room.type == RoomType.group
+                        ? AppColors.gold
+                        : colorScheme.surfaceContainerHighest,
+                    child: displayImage == null
+                        ? Icon(
+                            room.type == RoomType.group
+                                ? Icons.group
+                                : Icons.person,
+                            color: room.type == RoomType.group
+                                ? Colors.white
+                                : colorScheme.onSurfaceVariant,
+                            size: 18,
+                          )
+                        : null,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      displayName,
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: colorScheme.onSurface,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (unreadCount > 0)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 5,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: AppColors.gold,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        unreadCount > 99 ? '99+' : '$unreadCount',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              // 아래쪽: 마지막 손글씨 영역 (좌우·위아래 여백, 중앙 정렬)
+              Expanded(
+                child: Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.only(left: 4, right: 4, top: 4, bottom: 4),
+                  decoration: BoxDecoration(
+                    color: colorScheme.surfaceContainerHighest.withValues(
+                      alpha: 0.5,
+                    ),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: colorScheme.outline.withValues(alpha: 0.3),
+                    ),
+                  ),
+                  child: Center(
+                    child: _buildLastEventPreview(
+                      context,
+                      eventType: lastType,
+                      previewUrl: lastUrl,
+                      previewText: lastPreview,
+                      colorScheme: colorScheme,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 마지막 기록 1개 미리보기: 손글씨·사진·영상·PDF·텍스트
+  Widget _buildLastEventPreview(
+    BuildContext context, {
+    required String? eventType,
+    required String? previewUrl,
+    required String? previewText,
+    required ColorScheme colorScheme,
+  }) {
+    // 사진: URL 있으면 이미지 표시
+    if (eventType == 'image' && previewUrl != null && previewUrl.isNotEmpty) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(6),
+        child: Image.network(
+          previewUrl,
+          fit: BoxFit.contain,
+          width: double.infinity,
+          height: double.infinity,
+          errorBuilder: (_, __, ___) => _placeholderIcon(
+            colorScheme,
+            Icons.image_outlined,
+            '사진',
+          ),
+        ),
+      );
+    }
+    // 영상: 썸네일 URL 있으면 표시, 없으면 아이콘
+    if (eventType == 'video') {
+      if (previewUrl != null && previewUrl.isNotEmpty) {
+        return Stack(
+          alignment: Alignment.center,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: Image.network(
+                previewUrl,
+                fit: BoxFit.contain,
+                width: double.infinity,
+                height: double.infinity,
+                errorBuilder: (_, __, ___) => _placeholderIcon(
+                  colorScheme,
+                  Icons.videocam_outlined,
+                  '영상',
+                ),
+              ),
+            ),
+            Icon(Icons.play_circle_fill, color: Colors.white70, size: 28),
+          ],
+        );
+      }
+      return _placeholderIcon(colorScheme, Icons.videocam_outlined, '영상');
+    }
+    // PDF
+    if (eventType == 'pdf') {
+      if (previewUrl != null && previewUrl.isNotEmpty) {
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: Image.network(
+            previewUrl,
+            fit: BoxFit.contain,
+            width: double.infinity,
+            height: double.infinity,
+            errorBuilder: (_, __, ___) =>
+                _placeholderIcon(colorScheme, Icons.picture_as_pdf_outlined, 'PDF'),
+          ),
+        );
+      }
+      return _placeholderIcon(
+          colorScheme, Icons.picture_as_pdf_outlined, 'PDF');
+    }
+    // 손글씨
+    if (eventType == 'stroke') {
+      return _placeholderIcon(colorScheme, Icons.gesture, '손글씨');
+    }
+    // 텍스트 / 기타 / 빈 채팅방
+    return Text(
+      previewText ?? '새 채팅방',
+      style: TextStyle(
+        fontSize: 11,
+        color: colorScheme.onSurfaceVariant,
+      ),
+      maxLines: 2,
+      overflow: TextOverflow.ellipsis,
+      textAlign: TextAlign.center,
+    );
+  }
+
+  Widget _placeholderIcon(
+      ColorScheme colorScheme, IconData icon, String label) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(icon, size: 32, color: AppColors.gold),
+        const SizedBox(height: 4),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            color: colorScheme.onSurfaceVariant,
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildEmptyChatList() {
-    return const Center(
+    final colorScheme = Theme.of(context).colorScheme;
+    return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Icon(
             Icons.chat_bubble_outline,
             size: 64,
-            color: AppColors.mutedGray,
+            color: colorScheme.onSurfaceVariant,
           ),
-          SizedBox(height: 16),
+          const SizedBox(height: 16),
           Text(
             '채팅이 없습니다',
             style: TextStyle(
-              color: AppColors.mutedGray,
+              color: colorScheme.onSurfaceVariant,
               fontSize: 16,
             ),
           ),
-          SizedBox(height: 8),
+          const SizedBox(height: 8),
           Text(
             '우측 상단의 + 버튼을 눌러\n새 채팅을 시작해보세요',
             textAlign: TextAlign.center,
             style: TextStyle(
-              color: AppColors.mutedGray,
+              color: colorScheme.onSurfaceVariant,
               fontSize: 14,
             ),
           ),
@@ -95,38 +380,31 @@ class _ChatTabState extends State<ChatTab> {
     );
   }
 
-  Widget _buildChatList(RoomProvider roomProvider, String userId) {
-    return ListView.builder(
-      itemCount: roomProvider.rooms.length,
-      itemBuilder: (context, index) {
-        final room = roomProvider.rooms[index];
-        return PuzzleCard(
-          room: room,
-          displayName: roomProvider.getRoomDisplayName(room, userId),
-          displayImage: roomProvider.getRoomDisplayImage(room, userId),
-          currentUserId: userId,
-          onTap: () => _openRoom(room),
-          onLongPress: () => _showRoomOptionsSheet(context, room, userId),
-        );
-      },
-    );
-  }
-
-  void _openRoom(RoomModel room) {
+  Future<void> _openRoom(RoomModel room) async {
     final roomProvider = context.read<RoomProvider>();
     final authProvider = context.read<AuthProvider>();
-    roomProvider.selectRoom(room);
-    
-    // 읽음 처리
-    if (authProvider.user != null) {
-      roomProvider.markAsRead(room.id, authProvider.user!.uid);
+
+    // 서버에서 방 존재 확인 (캐시만 있던 삭제된 방이면 진입 방지)
+    final existing = await roomProvider.getRoomFromServer(room.id);
+    if (existing == null || !context.mounted) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('채팅방이 더 이상 존재하지 않습니다.')),
+        );
+      }
+      return;
     }
-    
-    // 캔버스 화면으로 이동
+
+    roomProvider.selectRoom(existing);
+    if (authProvider.user != null) {
+      roomProvider.markAsRead(existing.id, authProvider.user!.uid);
+    }
+
+    if (!context.mounted) return;
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => CanvasScreen(room: room),
+        builder: (context) => CanvasScreen(room: existing),
       ),
     );
   }
@@ -156,9 +434,10 @@ class _ChatTabState extends State<ChatTab> {
   }
 
   void _showNewChatSheet(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
     showModalBottomSheet(
       context: context,
-      backgroundColor: AppColors.paper,
+      backgroundColor: colorScheme.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
@@ -172,12 +451,12 @@ class _ChatTabState extends State<ChatTab> {
                 height: 4,
                 margin: const EdgeInsets.symmetric(vertical: 12),
                 decoration: BoxDecoration(
-                  color: AppColors.border,
+                  color: colorScheme.outlineVariant,
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
               ListTile(
-                leading: const Icon(Icons.person, color: AppColors.ink),
+                leading: Icon(Icons.person, color: colorScheme.onSurface),
                 title: const Text('1:1 채팅'),
                 subtitle: const Text('친구와 대화하기'),
                 onTap: () {
@@ -186,7 +465,7 @@ class _ChatTabState extends State<ChatTab> {
                 },
               ),
               ListTile(
-                leading: const Icon(Icons.group, color: AppColors.ink),
+                leading: Icon(Icons.group, color: colorScheme.onSurface),
                 title: const Text('그룹 채팅'),
                 subtitle: const Text('여러 명과 대화하기'),
                 onTap: () {
@@ -218,10 +497,12 @@ class _ChatTabState extends State<ChatTab> {
   void _showRoomOptionsSheet(BuildContext context, RoomModel room, String userId) {
     final roomProvider = context.read<RoomProvider>();
     final myRole = room.members[userId]?.role;
+    final scaffoldContext = context;
+    final colorScheme = Theme.of(context).colorScheme;
 
     showModalBottomSheet(
       context: context,
-      backgroundColor: AppColors.paper,
+      backgroundColor: colorScheme.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
@@ -235,36 +516,29 @@ class _ChatTabState extends State<ChatTab> {
                 height: 4,
                 margin: const EdgeInsets.symmetric(vertical: 12),
                 decoration: BoxDecoration(
-                  color: AppColors.border,
+                  color: colorScheme.outlineVariant,
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
-
-              // 채팅방 열기
               ListTile(
-                leading: const Icon(Icons.chat_bubble_outline, color: AppColors.ink),
+                leading: Icon(Icons.chat_bubble_outline, color: colorScheme.onSurface),
                 title: const Text('채팅방 열기'),
                 onTap: () {
                   Navigator.pop(context);
                   _openRoom(room);
                 },
               ),
-
-              // 알림 설정
               ListTile(
-                leading: const Icon(Icons.notifications_outlined, color: AppColors.ink),
+                leading: Icon(Icons.notifications_outlined, color: colorScheme.onSurface),
                 title: const Text('알림 설정'),
                 onTap: () {
                   Navigator.pop(context);
                   // TODO: 알림 설정
                 },
               ),
-
-              // 그룹 채팅 전용 옵션
               if (room.type == RoomType.group) ...[
-                // 초대 링크 생성 (선택)
                 ListTile(
-                  leading: const Icon(Icons.link, color: AppColors.ink),
+                  leading: Icon(Icons.link, color: colorScheme.onSurface),
                   title: const Text('초대 링크 생성'),
                   onTap: () async {
                     Navigator.pop(context);
@@ -281,21 +555,18 @@ class _ChatTabState extends State<ChatTab> {
                     }
                   },
                 ),
-                // 멤버 초대 (Admin 이상)
                 if (myRole == MemberRole.owner || myRole == MemberRole.admin)
                   ListTile(
-                    leading: const Icon(Icons.person_add_outlined, color: AppColors.ink),
+                    leading: Icon(Icons.person_add_outlined, color: colorScheme.onSurface),
                     title: const Text('멤버 초대'),
                     onTap: () {
                       Navigator.pop(context);
                       // TODO: 멤버 초대
                     },
                   ),
-
-                // 채팅방 설정 (Owner만)
                 if (myRole == MemberRole.owner)
                   ListTile(
-                    leading: const Icon(Icons.settings_outlined, color: AppColors.ink),
+                    leading: Icon(Icons.settings_outlined, color: colorScheme.onSurface),
                     title: const Text('채팅방 설정'),
                     onTap: () {
                       Navigator.pop(context);
@@ -316,14 +587,28 @@ class _ChatTabState extends State<ChatTab> {
                 onTap: () async {
                   Navigator.pop(context);
                   final confirm = await _showConfirmDialog(
-                    context,
+                    scaffoldContext,
                     room.type == RoomType.direct ? '채팅방 삭제' : '채팅방 나가기',
                     room.type == RoomType.direct
                         ? '이 채팅방을 삭제하시겠습니까?\n대화 내용이 모두 삭제됩니다.'
                         : '이 채팅방을 나가시겠습니까?',
                   );
-                  if (confirm && context.mounted) {
-                    await roomProvider.leaveRoom(room.id, userId);
+                  if (confirm && scaffoldContext.mounted) {
+                    final success = await roomProvider.leaveRoom(room.id, userId);
+                    if (scaffoldContext.mounted) {
+                      if (success) {
+                        ScaffoldMessenger.of(scaffoldContext).showSnackBar(
+                          const SnackBar(content: Text('채팅방을 나갔습니다.')),
+                        );
+                      } else {
+                        ScaffoldMessenger.of(scaffoldContext).showSnackBar(
+                          SnackBar(
+                            content: Text(roomProvider.errorMessage ?? '나가기 실패'),
+                            backgroundColor: Colors.red,
+                          ),
+                        );
+                      }
+                    }
                   }
                 },
               ),
@@ -342,6 +627,7 @@ class _ChatTabState extends State<ChatTab> {
     final myUserId = authProvider.user?.uid ?? '';
     final myRole = room.members[myUserId]?.role;
     final isHost = myRole == MemberRole.owner || myRole == MemberRole.admin;
+    final colorScheme = Theme.of(context).colorScheme;
 
     bool exportAllowed = room.exportAllowed;
     bool watermarkForced = room.watermarkForced;
@@ -350,7 +636,7 @@ class _ChatTabState extends State<ChatTab> {
 
     showModalBottomSheet(
       context: context,
-      backgroundColor: AppColors.paper,
+      backgroundColor: colorScheme.surface,
       isScrollControlled: true,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
@@ -478,10 +764,6 @@ class _ChatTabState extends State<ChatTab> {
                                 Navigator.pop(context);
                               }
                             },
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: AppColors.ink,
-                              foregroundColor: AppColors.paper,
-                            ),
                             child: const Text('저장'),
                           ),
                         ),
@@ -502,10 +784,11 @@ class _ChatTabState extends State<ChatTab> {
     final roomProvider = context.read<RoomProvider>();
     final authProvider = context.read<AuthProvider>();
     final myUserId = authProvider.user?.uid ?? '';
+    final colorScheme = Theme.of(context).colorScheme;
 
     showModalBottomSheet(
       context: context,
-      backgroundColor: AppColors.paper,
+      backgroundColor: colorScheme.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
@@ -519,15 +802,19 @@ class _ChatTabState extends State<ChatTab> {
                 height: 4,
                 margin: const EdgeInsets.symmetric(vertical: 12),
                 decoration: BoxDecoration(
-                  color: AppColors.border,
+                  color: colorScheme.outlineVariant,
                   borderRadius: BorderRadius.circular(2),
                 ),
               ),
-              const Padding(
-                padding: EdgeInsets.all(16),
+              Padding(
+                padding: const EdgeInsets.all(16),
                 child: Text(
                   '멤버 역할 관리',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: colorScheme.onSurface,
+                  ),
                 ),
               ),
               ...room.members.entries.map((entry) {

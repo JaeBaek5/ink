@@ -1,1 +1,6 @@
-{"flutter":{"platforms":{"android":{"default":{"projectId":"ink-talk-24c71","appId":"1:770259883594:android:60b207d2a2d13d8592f8b3","fileOutput":"android/app/google-services.json"}},"ios":{"default":{"projectId":"ink-talk-24c71","appId":"1:770259883594:ios:3ae2722088a3a64192f8b3","uploadDebugSymbols":false,"fileOutput":"ios/Runner/GoogleService-Info.plist"}},"dart":{"lib/firebase_options.dart":{"projectId":"ink-talk-24c71","configurations":{"android":"1:770259883594:android:60b207d2a2d13d8592f8b3","ios":"1:770259883594:ios:3ae2722088a3a64192f8b3","web":"1:770259883594:web:c1569cad97ed290592f8b3"}}}}}}
+{
+  "firestore": {
+    "rules": "firestore.rules",
+    "indexes": "firestore.indexes.json"
+  },
+  "flutter":{"platforms":{"android":{"default":{"projectId":"ink-talk-24c71","appId":"1:770259883594:android:60b207d2a2d13d8592f8b3","fileOutput":"android/app/google-services.json"}},"ios":{"default":{"projectId":"ink-talk-24c71","appId":"1:770259883594:ios:3ae2722088a3a64192f8b3","uploadDebugSymbols":false,"fileOutput":"ios/Runner/GoogleService-Info.plist"}},"dart":{"lib/firebase_options.dart":{"projectId":"ink-talk-24c71","configurations":{"android":"1:770259883594:android:60b207d2a2d13d8592f8b3","ios":"1:770259883594:ios:3ae2722088a3a64192f8b3","web":"1:770259883594:web:c1569cad97ed290592f8b3"}}}}}}

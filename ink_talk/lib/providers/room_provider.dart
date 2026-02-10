@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart' show Source;
 import 'package:flutter/foundation.dart';
+import '../core/utils/firestore_retry.dart';
 import '../models/room_model.dart';
 import '../models/user_model.dart';
 import '../services/room_service.dart';
@@ -16,6 +18,7 @@ class RoomProvider extends ChangeNotifier {
   String? _errorMessage;
 
   StreamSubscription? _roomsSubscription;
+  int _initVersion = 0;
 
   /// Getters
   List<RoomModel> get rooms => _rooms;
@@ -28,17 +31,22 @@ class RoomProvider extends ChangeNotifier {
   /// 멤버 사용자 정보 가져오기
   UserModel? getMemberUser(String memberId) => _memberUserCache[memberId];
 
-  /// 초기화
-  void initialize(String userId) {
+  /// 초기화. stream 첫 데이터 수신 시 완료되는 Future 반환.
+  Future<void> initialize(String userId) async {
     _roomsSubscription?.cancel();
+    _initVersion++;
+    final version = _initVersion;
+    final completer = Completer<void>();
 
-    _roomsSubscription = _roomService.getRoomsStream(userId).listen(
+    _roomsSubscription = streamWithRetry(() => _roomService.getRoomsStream(userId)).listen(
       (rooms) async {
+        if (version != _initVersion) return; // 취소된 구독 무시
         _rooms = rooms;
 
         // 멤버 정보 로드
         for (final room in rooms) {
           for (final memberId in room.memberIds) {
+            if (version != _initVersion) return;
             if (!_memberUserCache.containsKey(memberId)) {
               final user = await _roomService.getMemberUserInfo(memberId);
               if (user != null) {
@@ -47,13 +55,21 @@ class RoomProvider extends ChangeNotifier {
             }
           }
         }
+        if (version == _initVersion && !completer.isCompleted) {
+          completer.complete();
+        }
         notifyListeners();
       },
       onError: (e) {
-        _errorMessage = e.toString();
-        notifyListeners();
+        if (version == _initVersion) {
+          _errorMessage = e.toString();
+          if (!completer.isCompleted) completer.complete();
+          notifyListeners();
+        }
       },
     );
+
+    return completer.future;
   }
 
   /// 1:1 채팅 생성
@@ -112,7 +128,7 @@ class RoomProvider extends ChangeNotifier {
 
   /// 채팅방 실시간 스트림 (단일 방)
   Stream<RoomModel?> getRoomStream(String roomId) {
-    return _roomService.getRoomStream(roomId);
+    return streamWithRetry(() => _roomService.getRoomStream(roomId));
   }
 
   /// 채팅방 나가기
@@ -194,6 +210,16 @@ class RoomProvider extends ChangeNotifier {
     }
   }
 
+  /// 1:1 채팅방 조회 (없으면 null, 생성하지 않음)
+  Future<RoomModel?> getDirectRoom(String userId, String friendId) async {
+    return _roomService.getDirectRoom(userId, friendId);
+  }
+
+  /// 서버에서 채팅방 존재 여부 확인 (캐시 무시). 삭제된 방이면 null.
+  Future<RoomModel?> getRoomFromServer(String roomId) async {
+    return _roomService.getRoom(roomId, source: Source.server);
+  }
+
   /// 읽음 처리
   Future<void> markAsRead(String roomId, String userId) async {
     await _roomService.markAsRead(roomId, userId);
@@ -203,25 +229,6 @@ class RoomProvider extends ChangeNotifier {
   void clearError() {
     _errorMessage = null;
     notifyListeners();
-  }
-
-  /// 테스트 채팅방 생성
-  Future<RoomModel?> createTestRoom(String userId) async {
-    _isLoading = true;
-    _errorMessage = null;
-    notifyListeners();
-
-    try {
-      final room = await _roomService.createTestRoom(userId);
-      _isLoading = false;
-      notifyListeners();
-      return room;
-    } catch (e) {
-      _errorMessage = e.toString().replaceAll('Exception: ', '');
-      _isLoading = false;
-      notifyListeners();
-      return null;
-    }
   }
 
   /// 채팅방 이름 가져오기 (1:1의 경우 상대방 이름)

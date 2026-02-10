@@ -2,14 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../../core/constants/app_colors.dart';
 import '../../../providers/auth_provider.dart';
-import '../../../providers/room_provider.dart';
+import '../../../providers/theme_provider.dart';
 import '../../../services/settings_service.dart';
-import '../../canvas/canvas_screen.dart';
 import '../../settings/profile_edit_screen.dart';
 import '../../settings/notification_settings_screen.dart';
+import '../../settings/theme_screen.dart';
 import '../../settings/canvas_expand_screen.dart';
 import '../../settings/cache_screen.dart';
 import '../../settings/hover_visibility_screen.dart';
+import '../../settings/blocked_users_screen.dart';
+import '../../settings/default_pen_screen.dart';
 
 /// 설정 탭
 class SettingsTab extends StatefulWidget {
@@ -37,7 +39,9 @@ class _SettingsTabState extends State<SettingsTab> {
   @override
   Widget build(BuildContext context) {
     final authProvider = context.watch<AuthProvider>();
+    final themeProvider = context.watch<ThemeProvider>();
     final user = authProvider.user;
+    final colorScheme = Theme.of(context).colorScheme;
 
     return Scaffold(
       appBar: AppBar(
@@ -45,7 +49,6 @@ class _SettingsTabState extends State<SettingsTab> {
       ),
       body: ListView(
         children: [
-          // 프로필 섹션
           Container(
             padding: const EdgeInsets.all(20),
             child: Row(
@@ -67,18 +70,18 @@ class _SettingsTabState extends State<SettingsTab> {
                     children: [
                       Text(
                         user?.displayName ?? '이름 없음',
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.bold,
-                          color: AppColors.ink,
+                          color: colorScheme.onSurface,
                         ),
                       ),
                       const SizedBox(height: 4),
                       Text(
                         user?.email ?? '',
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 14,
-                          color: AppColors.mutedGray,
+                          color: colorScheme.onSurfaceVariant,
                         ),
                       ),
                     ],
@@ -86,7 +89,6 @@ class _SettingsTabState extends State<SettingsTab> {
                 ),
                 IconButton(
                   icon: const Icon(Icons.edit_outlined),
-                  color: AppColors.mutedGray,
                   onPressed: () async {
                     await Navigator.push<bool>(
                       context,
@@ -99,11 +101,8 @@ class _SettingsTabState extends State<SettingsTab> {
               ],
             ),
           ),
-          
           const Divider(),
-          
-          // 일반 설정
-          _buildSectionHeader('일반'),
+          _buildSectionHeader(context, '일반'),
           ListTile(
             leading: const Icon(Icons.notifications_outlined),
             title: const Text('알림 설정'),
@@ -124,22 +123,44 @@ class _SettingsTabState extends State<SettingsTab> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  '시스템 설정',
+                  themeProvider.themeModeLabel,
                   style: TextStyle(
-                    color: AppColors.mutedGray,
+                    color: colorScheme.onSurfaceVariant,
                     fontSize: 14,
                   ),
                 ),
                 const Icon(Icons.chevron_right),
               ],
             ),
-            onTap: () {},
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const ThemeScreen(),
+                ),
+              );
+            },
           ),
           
           const Divider(),
+          _buildSectionHeader(context, '친구'),
+          ListTile(
+            leading: const Icon(Icons.block_outlined),
+            title: const Text('친구 차단 관리'),
+            subtitle: const Text('차단한 사용자 목록 및 차단 해제'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const BlockedUsersScreen(),
+                ),
+              );
+            },
+          ),
           
-          // 캔버스 설정
-          _buildSectionHeader('캔버스'),
+          const Divider(),
+          _buildSectionHeader(context, '캔버스'),
           ListTile(
             leading: const Icon(Icons.expand_outlined),
             title: const Text('캔버스 확장 방식'),
@@ -149,7 +170,7 @@ class _SettingsTabState extends State<SettingsTab> {
                 Text(
                   _canvasExpandMode.displayName,
                   style: TextStyle(
-                    color: AppColors.mutedGray,
+                    color: colorScheme.onSurfaceVariant,
                     fontSize: 14,
                   ),
                 ),
@@ -170,7 +191,14 @@ class _SettingsTabState extends State<SettingsTab> {
             leading: const Icon(Icons.brush_outlined),
             title: const Text('기본 펜 설정'),
             trailing: const Icon(Icons.chevron_right),
-            onTap: () {},
+            onTap: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const DefaultPenScreen(),
+                ),
+              );
+            },
           ),
           ListTile(
             leading: const Icon(Icons.person_pin_circle_outlined),
@@ -188,9 +216,7 @@ class _SettingsTabState extends State<SettingsTab> {
           ),
           
           const Divider(),
-          
-          // 저장공간
-          _buildSectionHeader('저장공간'),
+          _buildSectionHeader(context, '저장공간'),
           ListTile(
             leading: const Icon(Icons.storage_outlined),
             title: const Text('캐시 관리'),
@@ -207,20 +233,7 @@ class _SettingsTabState extends State<SettingsTab> {
           ),
           
           const Divider(),
-          
-          // 개발자 옵션
-          _buildSectionHeader('개발자'),
-          ListTile(
-            leading: const Icon(Icons.science_outlined, color: AppColors.gold),
-            title: const Text('테스트 채팅방 생성'),
-            subtitle: const Text('캔버스 테스트용'),
-            onTap: () => _createTestRoom(context),
-          ),
-          
-          const Divider(),
-          
-          // 계정
-          _buildSectionHeader('계정'),
+          _buildSectionHeader(context, '계정'),
           ListTile(
             leading: const Icon(Icons.logout, color: Colors.red),
             title: const Text(
@@ -266,58 +279,38 @@ class _SettingsTabState extends State<SettingsTab> {
 
     if (confirmed != true || !context.mounted) return;
 
-    final ok = await context.read<AuthProvider>().deleteAccount();
-    if (context.mounted) {
-      if (ok) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('계정이 삭제되었습니다.')),
-        );
-      } else {
-        final msg = context.read<AuthProvider>().errorMessage ?? '탈퇴에 실패했습니다.';
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(msg), backgroundColor: Colors.red),
-        );
+    final authProvider = context.read<AuthProvider>();
+    final ok = await authProvider.deleteAccount();
+    if (!context.mounted) return;
+    if (ok) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('계정이 삭제되었습니다.')),
+      );
+    } else {
+      String msg = authProvider.errorMessage ?? '탈퇴에 실패했습니다.';
+      msg = msg.replaceAll('Exception: ', '');
+      if (msg.contains('requires-recent-login') || msg.contains('재인증')) {
+        msg = '보안을 위해 다시 로그인한 뒤 탈퇴를 시도해 주세요.';
       }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(msg), backgroundColor: Colors.red),
+      );
     }
   }
 
-  Widget _buildSectionHeader(String title) {
+  Widget _buildSectionHeader(BuildContext context, String title) {
+    final colorScheme = Theme.of(context).colorScheme;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
       child: Text(
         title,
-        style: const TextStyle(
-          color: AppColors.mutedGray,
+        style: TextStyle(
+          color: colorScheme.onSurfaceVariant,
           fontSize: 12,
           fontWeight: FontWeight.bold,
         ),
       ),
     );
-  }
-
-  Future<void> _createTestRoom(BuildContext context) async {
-    final authProvider = context.read<AuthProvider>();
-    final roomProvider = context.read<RoomProvider>();
-    final userId = authProvider.user?.uid;
-
-    if (userId == null) return;
-
-    // 테스트 채팅방 생성
-    final room = await roomProvider.createTestRoom(userId);
-
-    if (room != null && context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('테스트 채팅방이 생성되었습니다!')),
-      );
-      
-      // 캔버스 화면으로 이동
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => CanvasScreen(room: room),
-        ),
-      );
-    }
   }
 
   Future<void> _handleSignOut(BuildContext context) async {

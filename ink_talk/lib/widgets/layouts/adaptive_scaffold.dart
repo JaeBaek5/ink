@@ -71,15 +71,16 @@ class _PhoneLayout extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
     return Scaffold(
       body: IndexedStack(
         index: currentIndex,
         children: screens,
       ),
       bottomNavigationBar: Container(
-        decoration: const BoxDecoration(
+        decoration: BoxDecoration(
           border: Border(
-            top: BorderSide(color: AppColors.border, width: 1),
+            top: BorderSide(color: colorScheme.outline, width: 1),
           ),
         ),
         child: BottomNavigationBar(
@@ -113,7 +114,7 @@ class _TabletLayout extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isLandscape = Responsive.isLandscape(context);
-    
+    final dividerColor = Theme.of(context).colorScheme.outline;
     return Scaffold(
       body: Row(
         children: [
@@ -124,8 +125,8 @@ class _TabletLayout extends StatelessWidget {
             tabItems: tabItems,
           ),
           
-          // 구분선
-          const VerticalDivider(width: 1, thickness: 1),
+          // 구분선 (테마 색)
+          VerticalDivider(width: 1, thickness: 1, color: dividerColor),
           
           // 중앙: 목록 또는 메인 콘텐츠
           Expanded(
@@ -135,7 +136,7 @@ class _TabletLayout extends StatelessWidget {
           
           // 우측: 상세 뷰 (있을 경우)
           if (detailView != null && isLandscape) ...[
-            const VerticalDivider(width: 1, thickness: 1),
+            VerticalDivider(width: 1, thickness: 1, color: dividerColor),
             Expanded(
               flex: 3,
               child: detailView!,
@@ -147,7 +148,7 @@ class _TabletLayout extends StatelessWidget {
   }
 }
 
-/// 좌측 네비게이션 레일
+/// 좌측 네비게이션 레일 (다크 모드 대응)
 class _NavigationRail extends StatelessWidget {
   final int currentIndex;
   final ValueChanged<int> onTabChanged;
@@ -161,20 +162,21 @@ class _NavigationRail extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
     return NavigationRail(
       selectedIndex: currentIndex,
       onDestinationSelected: onTabChanged,
-      backgroundColor: AppColors.paper,
+      backgroundColor: colorScheme.surface,
       indicatorColor: AppColors.gold.withValues(alpha: 0.2),
-      selectedIconTheme: const IconThemeData(color: AppColors.ink),
-      unselectedIconTheme: const IconThemeData(color: AppColors.mutedGray),
-      selectedLabelTextStyle: const TextStyle(
-        color: AppColors.ink,
+      selectedIconTheme: IconThemeData(color: colorScheme.onSurface),
+      unselectedIconTheme: IconThemeData(color: colorScheme.onSurfaceVariant),
+      selectedLabelTextStyle: TextStyle(
+        color: colorScheme.onSurface,
         fontSize: 12,
         fontWeight: FontWeight.w600,
       ),
-      unselectedLabelTextStyle: const TextStyle(
-        color: AppColors.mutedGray,
+      unselectedLabelTextStyle: TextStyle(
+        color: colorScheme.onSurfaceVariant,
         fontSize: 12,
       ),
       labelType: NavigationRailLabelType.all,

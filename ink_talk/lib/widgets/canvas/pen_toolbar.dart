@@ -17,55 +17,185 @@ class PenToolbar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isEraserSelected = controller.currentPen == PenType.eraser;
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: const BoxDecoration(
         color: AppColors.paper,
         border: Border(
           bottom: BorderSide(color: AppColors.border),
         ),
       ),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            // 펜 슬롯 (펜1, 펜2, 지우개)
-            _buildPenSlots(),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(8, 6, 8, 4),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  _buildPenSlots(context),
+                  _buildDivider(),
+                  _buildSelectionTools(),
+                  _buildDivider(),
+                  _buildColorSlots(context),
+                  _buildDivider(),
+                  _buildWidthSlots(),
+                  _buildDivider(),
+                  _buildUndoRedo(),
+                  _buildDivider(),
+                  _buildShapeButton(),
+                  _buildDivider(),
+                  _buildTextButtons(),
+                  _buildDivider(),
+                  _buildMediaButtons(),
+                ],
+              ),
+            ),
+          ),
+          // 지우개 선택 시: 모드 + 크기 바
+          if (isEraserSelected) _buildEraserSubBar(context),
+        ],
+      ),
+    );
+  }
 
-            _buildDivider(),
-
-            // 선택 도구
-            _buildSelectionTools(),
-
-            _buildDivider(),
-
-            // 색상 슬롯
-            _buildColorSlots(context),
-
-            _buildDivider(),
-
-            // 굵기 슬롯
-            _buildWidthSlots(),
-
-            _buildDivider(),
-
-            // Undo / Redo
-            _buildUndoRedo(),
-
-            _buildDivider(),
-
-            // 도형 선택
-            _buildShapeButton(),
-
-            _buildDivider(),
-
-            // 텍스트 버튼
-            _buildTextButtons(),
-            _buildDivider(),
-            _buildMediaButtons(),
-          ],
+  /// 색상: AUTO + 6색 + 파레트 (툴바 한 줄에 포함)
+  Widget _buildColorSlots(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Tooltip(
+          message: 'AUTO 색상',
+          child: InkWell(
+            onTap: controller.toggleAutoColor,
+            borderRadius: BorderRadius.circular(6),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+              decoration: BoxDecoration(
+                color: controller.isAutoColor ? AppColors.gold.withValues(alpha: 0.2) : null,
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(
+                  color: controller.isAutoColor ? AppColors.gold : AppColors.border,
+                ),
+              ),
+              child: Text(
+                'AUTO',
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  color: controller.isAutoColor ? AppColors.gold : AppColors.mutedGray,
+                ),
+              ),
+            ),
+          ),
         ),
+        const SizedBox(width: 4),
+        ...List.generate(6, (index) {
+          final isSelected = controller.selectedColorIndex == index && !controller.isAutoColor;
+          return GestureDetector(
+            onTap: () => controller.selectColor(index),
+            child: Container(
+              width: 24,
+              height: 24,
+              margin: const EdgeInsets.symmetric(horizontal: 2),
+              decoration: BoxDecoration(
+                color: controller.colorSlots[index],
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: isSelected ? AppColors.gold : AppColors.border,
+                  width: isSelected ? 2 : 1,
+                ),
+              ),
+            ),
+          );
+        }),
+        const SizedBox(width: 4),
+        Tooltip(
+          message: '길게 누르면 사용자 지정 색',
+          child: GestureDetector(
+            onLongPress: () => _showColorPickerForPalette(context),
+            child: Container(
+              width: 24,
+              height: 24,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(color: AppColors.border),
+                gradient: const LinearGradient(
+                  colors: [Colors.red, Colors.yellow, Colors.green, Colors.blue, Colors.purple, Colors.red],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+              ),
+              child: const Icon(Icons.palette_outlined, size: 14, color: Colors.white),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 지우개 선택 시 표시: 모드(획/영역) + 바 형태 크기 조정
+  Widget _buildEraserSubBar(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
+      decoration: BoxDecoration(
+        color: AppColors.paper,
+        border: Border(
+          top: BorderSide(color: AppColors.border.withValues(alpha: 0.5)),
+        ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text('모드', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+              const SizedBox(width: 8),
+              ChoiceChip(
+                label: const Text('획'),
+                selected: controller.eraserMode == EraserMode.stroke,
+                onSelected: (_) => controller.setEraserMode(EraserMode.stroke),
+                selectedColor: AppColors.gold.withValues(alpha: 0.3),
+              ),
+              const SizedBox(width: 4),
+              ChoiceChip(
+                label: const Text('영역'),
+                selected: controller.eraserMode == EraserMode.area,
+                onSelected: (_) => controller.setEraserMode(EraserMode.area),
+                selectedColor: AppColors.gold.withValues(alpha: 0.3),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: [
+              Icon(Icons.auto_fix_off, size: 18, color: AppColors.mutedGray),
+              const SizedBox(width: 8),
+              Expanded(
+                child: SliderTheme(
+                  data: SliderTheme.of(context).copyWith(
+                    activeTrackColor: AppColors.gold,
+                    inactiveTrackColor: AppColors.border,
+                    thumbColor: AppColors.gold,
+                  ),
+                  child: Slider(
+                    value: controller.eraserSize.clamp(8.0, 64.0),
+                    min: 8,
+                    max: 64,
+                    onChanged: (v) => controller.setEraserSize(v),
+                  ),
+                ),
+              ),
+              Text(
+                '${controller.eraserSize.round()}',
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.ink),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }
@@ -79,28 +209,16 @@ class PenToolbar extends StatelessWidget {
     );
   }
 
-  /// 펜 슬롯 (펜1, 펜2, 지우개)
-  Widget _buildPenSlots() {
+  /// 펜 슬롯 (문서 스펙: 펜·연필·만년필·브러시·형광펜·지우개)
+  Widget _buildPenSlots(BuildContext context) {
     return Row(
       children: [
-        _buildPenButton(
-          PenType.pen1,
-          Icons.edit,
-          '펜 1',
-          controller.currentPen == PenType.pen1,
-        ),
-        _buildPenButton(
-          PenType.pen2,
-          Icons.edit_outlined,
-          '펜 2',
-          controller.currentPen == PenType.pen2,
-        ),
-        _buildPenButton(
-          PenType.eraser,
-          Icons.auto_fix_normal,
-          '지우개',
-          controller.currentPen == PenType.eraser,
-        ),
+        _buildPenButton(PenType.pen1, Icons.edit, '펜', controller.currentPen == PenType.pen1),
+        _buildPenButton(PenType.pen2, Icons.create, '연필', controller.currentPen == PenType.pen2),
+        _buildPenButton(PenType.fountain, Icons.brush_outlined, '만년필', controller.currentPen == PenType.fountain),
+        _buildPenButton(PenType.brush, Icons.brush, '브러시', controller.currentPen == PenType.brush),
+        _buildPenButton(PenType.highlighter, Icons.highlight, '형광펜', controller.currentPen == PenType.highlighter),
+        _buildEraserButton(context),
       ],
     );
   }
@@ -124,6 +242,30 @@ class PenToolbar extends StatelessWidget {
           ),
           child: Icon(
             icon,
+            size: 20,
+            color: isSelected ? AppColors.gold : AppColors.ink,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 지우개 버튼 (탭 시 선택 → 바로 아래 바 형태로 크기 조정 표시)
+  Widget _buildEraserButton(BuildContext context) {
+    final isSelected = controller.currentPen == PenType.eraser;
+    return Tooltip(
+      message: '지우개',
+      child: InkWell(
+        onTap: () => controller.selectPen(PenType.eraser),
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: isSelected ? AppColors.gold.withValues(alpha: 0.2) : null,
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(
+            Icons.auto_fix_off,
             size: 20,
             color: isSelected ? AppColors.gold : AppColors.ink,
           ),
@@ -181,70 +323,7 @@ class PenToolbar extends StatelessWidget {
     );
   }
 
-  /// 색상 슬롯
-  Widget _buildColorSlots(BuildContext context) {
-    return Row(
-      children: [
-        // AUTO 버튼
-        Tooltip(
-          message: 'AUTO 색상',
-          child: InkWell(
-            onTap: controller.toggleAutoColor,
-            borderRadius: BorderRadius.circular(8),
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-              decoration: BoxDecoration(
-                color: controller.isAutoColor
-                    ? AppColors.gold.withValues(alpha: 0.2)
-                    : null,
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(
-                  color: controller.isAutoColor
-                      ? AppColors.gold
-                      : AppColors.border,
-                ),
-              ),
-              child: Text(
-                'AUTO',
-                style: TextStyle(
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                  color: controller.isAutoColor
-                      ? AppColors.gold
-                      : AppColors.mutedGray,
-                ),
-              ),
-            ),
-          ),
-        ),
-        const SizedBox(width: 4),
-        // 색상 슬롯
-        ...List.generate(3, (index) {
-          final isSelected = controller.selectedColorIndex == index &&
-              !controller.isAutoColor;
-          return GestureDetector(
-            onTap: () => controller.selectColor(index),
-            onLongPress: () => _showColorPicker(context, index),
-            child: Container(
-              width: 24,
-              height: 24,
-              margin: const EdgeInsets.symmetric(horizontal: 2),
-              decoration: BoxDecoration(
-                color: controller.colorSlots[index],
-                shape: BoxShape.circle,
-                border: Border.all(
-                  color: isSelected ? AppColors.gold : AppColors.border,
-                  width: isSelected ? 2 : 1,
-                ),
-              ),
-            ),
-          );
-        }),
-      ],
-    );
-  }
-
-  void _showColorPicker(BuildContext context, int slotIndex) {
+  void _showColorPickerForPalette(BuildContext context) {
     final colors = [
       Colors.black,
       Colors.white,
@@ -260,56 +339,35 @@ class PenToolbar extends StatelessWidget {
       Colors.brown,
       Colors.grey,
     ];
-
-    showModalBottomSheet(
+    showDialog(
       context: context,
-      backgroundColor: AppColors.paper,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (context) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  '색상 선택',
-                  style: TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.paper,
+        title: const Text('사용자 지정 색'),
+        content: SingleChildScrollView(
+          child: Wrap(
+            spacing: 12,
+            runSpacing: 12,
+            children: colors.map((color) {
+              return GestureDetector(
+                onTap: () {
+                  controller.setCustomColor(color);
+                  Navigator.pop(context);
+                },
+                child: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: color,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: AppColors.border),
                   ),
                 ),
-                const SizedBox(height: 16),
-                Wrap(
-                  spacing: 12,
-                  runSpacing: 12,
-                  children: colors.map((color) {
-                    return GestureDetector(
-                      onTap: () {
-                        controller.setSlotColor(slotIndex, color);
-                        Navigator.pop(context);
-                      },
-                      child: Container(
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          color: color,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: AppColors.border),
-                        ),
-                      ),
-                    );
-                  }).toList(),
-                ),
-                const SizedBox(height: 16),
-              ],
-            ),
+              );
+            }).toList(),
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 
@@ -351,41 +409,48 @@ class PenToolbar extends StatelessWidget {
     );
   }
 
-  /// Undo / Redo
+  /// Undo / Redo (컨트롤러 구독으로 스택 변경 시 버튼 활성/비활성 갱신)
   Widget _buildUndoRedo() {
-    return Row(
-      children: [
-        Tooltip(
-          message: '되돌리기',
-          child: InkWell(
-            onTap: controller.canUndo ? controller.undo : null,
-            borderRadius: BorderRadius.circular(8),
-            child: Container(
-              padding: const EdgeInsets.all(8),
-              child: Icon(
-                Icons.undo,
-                size: 20,
-                color: controller.canUndo ? AppColors.ink : AppColors.mutedGray,
+    return ListenableBuilder(
+      listenable: controller,
+      builder: (_, __) {
+        final canUndo = controller.canUndo;
+        final canRedo = controller.canRedo;
+        return Row(
+          children: [
+            Tooltip(
+              message: '되돌리기',
+              child: InkWell(
+                onTap: canUndo ? () => controller.undo() : null,
+                borderRadius: BorderRadius.circular(8),
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  child: Icon(
+                    Icons.undo,
+                    size: 20,
+                    color: canUndo ? AppColors.ink : AppColors.mutedGray,
+                  ),
+                ),
               ),
             ),
-          ),
-        ),
-        Tooltip(
-          message: '다시 실행',
-          child: InkWell(
-            onTap: controller.canRedo ? controller.redo : null,
-            borderRadius: BorderRadius.circular(8),
-            child: Container(
-              padding: const EdgeInsets.all(8),
-              child: Icon(
-                Icons.redo,
-                size: 20,
-                color: controller.canRedo ? AppColors.ink : AppColors.mutedGray,
+            Tooltip(
+              message: '다시 실행',
+              child: InkWell(
+                onTap: canRedo ? () => controller.redo() : null,
+                borderRadius: BorderRadius.circular(8),
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  child: Icon(
+                    Icons.redo,
+                    size: 20,
+                    color: canRedo ? AppColors.ink : AppColors.mutedGray,
+                  ),
+                ),
               ),
             ),
-          ),
-        ),
-      ],
+          ],
+        );
+      },
     );
   }
 

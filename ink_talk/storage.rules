@@ -1,13 +1,13 @@
 rules_version = '2';
 // Firebase Storage 보안 규칙 (INK 채팅방 미디어 업로드용)
 // 업로드 경로: rooms/{roomId}/media/{timestamp}_{fileName}
-// 테스트/운영: 로그인한 사용자만 해당 경로 읽기·쓰기 허용
+// 복구: 해당 채팅방 멤버만 읽기·쓰기 허용 (Firestore rooms 문서의 memberIds로 검증)
 
 service firebase.storage {
   match /b/{bucket}/o {
-    // 채팅방별 미디어 (사진/영상/PDF)
     match /rooms/{roomId}/media/{fileName} {
-      allow read, write: if request.auth != null;
+      allow read, write: if request.auth != null
+        && request.auth.uid in firestore.get(/databases/(default)/documents/rooms/$(roomId)).data.memberIds;
     }
   }
 }

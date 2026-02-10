@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
-import '../../core/constants/app_colors.dart';
 
 /// 캐시 관리 화면
 class CacheScreen extends StatefulWidget {
@@ -112,8 +111,8 @@ class _CacheScreenState extends State<CacheScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
     return Scaffold(
-      backgroundColor: AppColors.paper,
       appBar: AppBar(title: const Text('캐시 관리')),
       body: ListView(
         children: [
@@ -121,11 +120,11 @@ class _CacheScreenState extends State<CacheScreen> {
             title: const Text('캐시 용량'),
             subtitle: Text(_cacheSizeText),
           ),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Text(
               '이미지, PDF 등 임시 파일이 저장됩니다.',
-              style: TextStyle(fontSize: 12, color: AppColors.mutedGray),
+              style: TextStyle(fontSize: 12, color: colorScheme.onSurfaceVariant),
             ),
           ),
           const SizedBox(height: 24),
@@ -141,10 +140,6 @@ class _CacheScreenState extends State<CacheScreen> {
                     )
                   : const Icon(Icons.delete_outline),
               label: Text(_clearing ? '삭제 중...' : '캐시 삭제'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.ink,
-                foregroundColor: AppColors.paper,
-              ),
             ),
           ),
         ],

@@ -25,7 +25,17 @@ class MediaModel {
   final double y;
   final double width;
   final double height;
-  
+  /// 회전 각도 (도 단위, 0 = 없음, 오브젝트 중심 기준)
+  final double angleDegrees;
+  /// 기울이기 X (도 단위, 수평 전단)
+  final double skewXDegrees;
+  /// 기울이기 Y (도 단위, 수직 전단)
+  final double skewYDegrees;
+  /// 좌/우 180° 반전
+  final bool flipHorizontal;
+  /// 상/하 180° 반전
+  final bool flipVertical;
+
   // 스타일
   final double opacity;      // 투명도 (0.0 ~ 1.0)
   final int zIndex;          // 레이어 순서
@@ -52,6 +62,11 @@ class MediaModel {
     required this.y,
     required this.width,
     required this.height,
+    this.angleDegrees = 0.0,
+    this.skewXDegrees = 0.0,
+    this.skewYDegrees = 0.0,
+    this.flipHorizontal = false,
+    this.flipVertical = false,
     this.opacity = 1.0,
     this.zIndex = 0,
     this.totalPages,
@@ -79,8 +94,13 @@ class MediaModel {
       y: (data['y'] as num?)?.toDouble() ?? 0,
       width: (data['width'] as num?)?.toDouble() ?? 200,
       height: (data['height'] as num?)?.toDouble() ?? 200,
+      angleDegrees: (data['angle'] as num?)?.toDouble() ?? 0.0,
+      skewXDegrees: (data['skewX'] as num?)?.toDouble() ?? 0.0,
+      skewYDegrees: (data['skewY'] as num?)?.toDouble() ?? 0.0,
+      flipHorizontal: data['flipH'] == true,
+      flipVertical: data['flipV'] == true,
       opacity: (data['opacity'] as num?)?.toDouble() ?? 1.0,
-      zIndex: data['zIndex'] ?? 0,
+      zIndex: (data['zIndex'] as num?)?.toInt() ?? 0,
       totalPages: data['totalPages'],
       createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
       isDeleted: data['isDeleted'] ?? false,
@@ -101,6 +121,11 @@ class MediaModel {
       'y': y,
       'width': width,
       'height': height,
+      'angle': angleDegrees,
+      'skewX': skewXDegrees,
+      'skewY': skewYDegrees,
+      'flipH': flipHorizontal,
+      'flipV': flipVertical,
       'opacity': opacity,
       'zIndex': zIndex,
       'totalPages': totalPages,
@@ -115,6 +140,11 @@ class MediaModel {
     double? y,
     double? width,
     double? height,
+    double? angleDegrees,
+    double? skewXDegrees,
+    double? skewYDegrees,
+    bool? flipHorizontal,
+    bool? flipVertical,
     double? opacity,
     int? zIndex,
     int? currentPage,
@@ -133,6 +163,11 @@ class MediaModel {
       y: y ?? this.y,
       width: width ?? this.width,
       height: height ?? this.height,
+      angleDegrees: angleDegrees ?? this.angleDegrees,
+      skewXDegrees: skewXDegrees ?? this.skewXDegrees,
+      skewYDegrees: skewYDegrees ?? this.skewYDegrees,
+      flipHorizontal: flipHorizontal ?? this.flipHorizontal,
+      flipVertical: flipVertical ?? this.flipVertical,
       opacity: opacity ?? this.opacity,
       zIndex: zIndex ?? this.zIndex,
       totalPages: totalPages,

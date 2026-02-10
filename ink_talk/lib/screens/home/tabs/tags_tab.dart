@@ -96,13 +96,14 @@ class _TagsTabState extends State<TagsTab> {
   }
 
   Widget _buildTagCard(TagModel tag) {
+    final colorScheme = Theme.of(context).colorScheme;
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
-      color: tag.isRead ? AppColors.paper : AppColors.gold.withValues(alpha: 0.1),
+      color: tag.isRead ? colorScheme.surface : AppColors.gold.withValues(alpha: 0.1),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(
-          color: tag.isRead ? AppColors.border : AppColors.gold,
+          color: tag.isRead ? colorScheme.outline : AppColors.gold,
           width: tag.isRead ? 1 : 2,
         ),
       ),
@@ -118,12 +119,12 @@ class _TagsTabState extends State<TagsTab> {
                 width: 48,
                 height: 48,
                 decoration: BoxDecoration(
-                  color: _getTypeColor(tag.targetType).withValues(alpha: 0.2),
+                  color: _getTypeColor(context, tag.targetType).withValues(alpha: 0.2),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Icon(
                   _getTypeIcon(tag.targetType),
-                  color: _getTypeColor(tag.targetType),
+                  color: _getTypeColor(context, tag.targetType),
                 ),
               ),
               const SizedBox(width: 12),
@@ -134,24 +135,24 @@ class _TagsTabState extends State<TagsTab> {
                   children: [
                     Text(
                       _getTypeName(tag.targetType),
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontWeight: FontWeight.bold,
-                        color: AppColors.ink,
+                        color: Theme.of(context).colorScheme.onSurface,
                       ),
                     ),
                     const SizedBox(height: 4),
                     Text(
                       '채팅방: ${tag.roomId.substring(0, 8)}...',
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 12,
-                        color: AppColors.mutedGray,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
                       ),
                     ),
                     Text(
                       _formatDateTime(tag.createdAt),
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 12,
-                        color: AppColors.mutedGray,
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
                       ),
                     ),
                   ],
@@ -202,11 +203,12 @@ class _TagsTabState extends State<TagsTab> {
   }
 
   void _showSearchDialog() {
+    final colorScheme = Theme.of(context).colorScheme;
     showDialog(
       context: context,
       builder: (context) {
         return AlertDialog(
-          backgroundColor: AppColors.paper,
+          backgroundColor: colorScheme.surface,
           title: const Text('검색'),
           content: TextField(
             controller: _searchController,
@@ -250,10 +252,11 @@ class _TagsTabState extends State<TagsTab> {
 
   void _showFilterSheet(BuildContext context) {
     final tagProvider = context.read<TagProvider>();
-    
+    final colorScheme = Theme.of(context).colorScheme;
+
     showModalBottomSheet(
       context: context,
-      backgroundColor: AppColors.paper,
+      backgroundColor: colorScheme.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
@@ -271,18 +274,18 @@ class _TagsTabState extends State<TagsTab> {
                       height: 4,
                       margin: const EdgeInsets.symmetric(vertical: 12),
                       decoration: BoxDecoration(
-                        color: AppColors.border,
+                        color: colorScheme.outlineVariant,
                         borderRadius: BorderRadius.circular(2),
                       ),
                     ),
                   ),
-                  const Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     child: Text(
                       '유형',
                       style: TextStyle(
                         fontWeight: FontWeight.bold,
-                        color: AppColors.ink,
+                        color: colorScheme.onSurface,
                       ),
                     ),
                   ),
@@ -319,8 +322,6 @@ class _TagsTabState extends State<TagsTab> {
                         Navigator.pop(context);
                       },
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.gold,
-                        foregroundColor: Colors.white,
                         minimumSize: const Size.fromHeight(48),
                       ),
                       child: const Text('필터 초기화'),
@@ -349,16 +350,25 @@ class _TagsTabState extends State<TagsTab> {
   /// 원본으로 점프
   void _jumpToOriginal(TagModel tag) async {
     final tagProvider = context.read<TagProvider>();
+    final roomProvider = context.read<RoomProvider>();
 
-    // 읽음 처리
+    // 서버에서 방 존재 확인 (삭제된 방이면 진입 방지)
+    final room = await roomProvider.getRoomFromServer(tag.roomId);
+    if (room == null || !mounted) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('채팅방이 더 이상 존재하지 않습니다.')),
+        );
+      }
+      return;
+    }
+
     if (!tag.isRead) {
       tagProvider.markAsRead(tag.id);
     }
 
-    // 방 정보 가져오기
     try {
-      final room = await _getRoomById(tag.roomId);
-      if (room != null && mounted) {
+      if (mounted) {
         // 캔버스 화면으로 이동
         final highlightTagArea = tag.areaX != null &&
                 tag.areaY != null &&
@@ -418,10 +428,11 @@ class _TagsTabState extends State<TagsTab> {
     }
   }
 
-  Color _getTypeColor(TagTargetType type) {
+  Color _getTypeColor(BuildContext context, TagTargetType type) {
+    final colorScheme = Theme.of(context).colorScheme;
     switch (type) {
       case TagTargetType.stroke:
-        return AppColors.ink;
+        return colorScheme.primary;
       case TagTargetType.image:
         return Colors.green;
       case TagTargetType.video:

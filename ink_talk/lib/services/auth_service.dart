@@ -50,9 +50,9 @@ class AuthService {
   /// 계정 삭제 (탈퇴). Google 로그인 사용자: 재인증 후 삭제
   Future<void> deleteAccount() async {
     final user = _auth.currentUser;
-    if (user == null) return;
+    if (user == null) throw Exception('로그인된 사용자가 없습니다.');
 
-    // 최근 로그인이 아니면 재인증 필요
+    // 최근 로그인이 아니면 재인증 필요 (Firebase 요구사항)
     try {
       final googleUser = await _googleSignIn.signInSilently();
       if (googleUser != null) {
@@ -62,11 +62,15 @@ class AuthService {
           idToken: googleAuth.idToken,
         );
         await user.reauthenticateWithCredential(credential);
+      } else {
+        throw Exception('재인증 필요');
       }
-    } catch (_) {
+    } catch (e) {
       // 재인증 실패 시 사용자에게 Google 로그인 다시 요청
       final googleUser = await _googleSignIn.signIn();
-      if (googleUser == null) throw Exception('재인증이 필요합니다.');
+      if (googleUser == null) {
+        throw Exception('탈퇴하려면 다시 로그인해 주세요. (재인증이 필요합니다)');
+      }
       final googleAuth = await googleUser.authentication;
       final credential = GoogleAuthProvider.credential(
         accessToken: googleAuth.accessToken,

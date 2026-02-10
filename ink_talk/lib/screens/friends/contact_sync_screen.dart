@@ -156,7 +156,7 @@ class _ContactSyncScreenState extends State<ContactSyncScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            '$successCount명의 친구가 추가되었습니다.${failCount > 0 ? ' ($failCount명 실패)' : ''}',
+            '$successCount명에게 친구 요청을 보냈습니다.${failCount > 0 ? ' ($failCount명 실패)' : ''}',
           ),
         ),
       );

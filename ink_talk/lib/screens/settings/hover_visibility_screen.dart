@@ -48,15 +48,14 @@ class _HoverVisibilityScreenState extends State<HoverVisibilityScreen> {
       );
     }
     return Scaffold(
-      backgroundColor: AppColors.paper,
       appBar: AppBar(title: const Text('호버 표시')),
       body: ListView(
         children: [
-          const Padding(
-            padding: EdgeInsets.all(16),
+          Padding(
+            padding: const EdgeInsets.all(16),
             child: Text(
               '캔버스에서 다른 사용자 펜 근접 시 커서/닉네임 표시 범위',
-              style: TextStyle(color: AppColors.mutedGray),
+              style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
             ),
           ),
           RadioListTile<HoverVisibility>(

@@ -103,8 +103,10 @@ class AuthProvider extends ChangeNotifier {
       _isLoading = false;
       notifyListeners();
       return true;
-    } catch (e) {
+    } catch (e, st) {
       _errorMessage = e.toString();
+      debugPrint('deleteAccount error: $e');
+      debugPrint('$st');
       _isLoading = false;
       notifyListeners();
       return false;

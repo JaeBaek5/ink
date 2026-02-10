@@ -1,15 +1,33 @@
 import 'dart:async';
+import 'dart:math' show sqrt;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import '../models/stroke_model.dart';
+import 'audit_log_service.dart';
 
 /// 스트로크 서비스 (실시간 동기화)
 class StrokeService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final AuditLogService _auditLog = AuditLogService();
 
   /// 스트로크 컬렉션 참조
   CollectionReference<Map<String, dynamic>> _strokesCollection(String roomId) {
     return _firestore.collection('rooms').doc(roomId).collection('strokes');
+  }
+
+  /// 차단 기간 중 해당 발신자가 보낸 스트로크 수 (친구 차단 관리 표시용)
+  Future<int> countStrokesFromSenderAfter(
+      String roomId, String senderId, DateTime after) async {
+    try {
+      final snapshot = await _strokesCollection(roomId)
+          .where('senderId', isEqualTo: senderId)
+          .where('createdAt', isGreaterThan: Timestamp.fromDate(after))
+          .where('isDeleted', isEqualTo: false)
+          .get();
+      return snapshot.docs.length;
+    } catch (_) {
+      return 0;
+    }
   }
 
   /// 스트로크 실시간 스트림
@@ -27,6 +45,7 @@ class StrokeService {
   Future<String> saveStroke(StrokeModel stroke) async {
     try {
       final docRef = await _strokesCollection(stroke.roomId).add(stroke.toFirestore());
+      _auditLog.logStrokeCreated(stroke.senderId, stroke.roomId, docRef.id);
       return docRef.id;
     } catch (e) {
       debugPrint('스트로크 저장 실패: $e');
@@ -45,24 +64,50 @@ class StrokeService {
     }
   }
 
-  /// 스트로크 삭제 (소프트 삭제)
-  Future<void> deleteStroke(String roomId, String strokeId) async {
+  /// 스트로크 삭제 (소프트 삭제). deletedAt, deletedBy 기록 → 운영자 복구 가능.
+  Future<void> deleteStroke(String roomId, String strokeId, {String? userId}) async {
     try {
-      await _strokesCollection(roomId).doc(strokeId).update({
-        'isDeleted': true,
-      });
+      final updates = <String, dynamic>{'isDeleted': true};
+      if (userId != null) {
+        updates['deletedAt'] = FieldValue.serverTimestamp();
+        updates['deletedBy'] = userId;
+      }
+      await _strokesCollection(roomId).doc(strokeId).update(updates);
+      if (userId != null) _auditLog.logStrokeDeleted(userId, roomId, strokeId);
     } catch (e) {
       debugPrint('스트로크 삭제 실패: $e');
     }
   }
 
   /// 여러 스트로크 삭제
-  Future<void> deleteStrokes(String roomId, List<String> strokeIds) async {
+  Future<void> deleteStrokes(String roomId, List<String> strokeIds, {String? userId}) async {
+    if (strokeIds.isEmpty) return;
     final batch = _firestore.batch();
+    final updates = <String, dynamic>{'isDeleted': true};
+    if (userId != null) {
+      updates['deletedAt'] = FieldValue.serverTimestamp();
+      updates['deletedBy'] = userId;
+    }
     for (final id in strokeIds) {
-      batch.update(_strokesCollection(roomId).doc(id), {'isDeleted': true});
+      batch.update(_strokesCollection(roomId).doc(id), updates);
     }
     await batch.commit();
+    if (userId != null) {
+      for (final id in strokeIds) {
+        _auditLog.logStrokeDeleted(userId, roomId, id);
+      }
+    }
+  }
+
+  /// 스트로크 복구 (Undo/Redo용)
+  Future<void> restoreStroke(String roomId, String strokeId) async {
+    try {
+      await _strokesCollection(roomId).doc(strokeId).update({
+        'isDeleted': false,
+      });
+    } catch (e) {
+      debugPrint('스트로크 복구 실패: $e');
+    }
   }
 
   /// Douglas-Peucker 알고리즘 (좌표 압축)
@@ -121,6 +166,6 @@ class StrokeService {
   static double _distance(StrokePoint a, StrokePoint b) {
     final dx = a.x - b.x;
     final dy = a.y - b.y;
-    return (dx * dx + dy * dy);
+    return sqrt(dx * dx + dy * dy);
   }
 }

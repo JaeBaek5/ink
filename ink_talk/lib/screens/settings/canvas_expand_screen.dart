@@ -51,7 +51,6 @@ class _CanvasExpandScreenState extends State<CanvasExpandScreen> {
     }
 
     return Scaffold(
-      backgroundColor: AppColors.paper,
       appBar: AppBar(title: const Text('캔버스 확장 방식')),
       body: ListView(
         children: [

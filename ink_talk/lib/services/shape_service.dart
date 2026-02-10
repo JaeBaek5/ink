@@ -1,10 +1,12 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import '../models/shape_model.dart';
+import 'audit_log_service.dart';
 
 /// 도형 서비스
 class ShapeService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final AuditLogService _auditLog = AuditLogService();
 
   /// 도형 컬렉션 참조
   CollectionReference<Map<String, dynamic>> _shapesCollection(String roomId) {
@@ -30,6 +32,7 @@ class ShapeService {
   Future<String> saveShape(ShapeModel shape) async {
     try {
       final docRef = await _shapesCollection(shape.roomId).add(shape.toFirestore());
+      _auditLog.logShapeCreated(shape.senderId, shape.roomId, docRef.id);
       return docRef.id;
     } catch (e) {
       debugPrint('도형 저장 실패: $e');
@@ -73,14 +76,29 @@ class ShapeService {
     }
   }
 
-  /// 도형 삭제 (소프트 삭제)
-  Future<void> deleteShape(String roomId, String shapeId) async {
+  /// 도형 삭제 (소프트 삭제). deletedAt, deletedBy 기록 → 운영자 복구 가능.
+  Future<void> deleteShape(String roomId, String shapeId, {String? userId}) async {
     try {
-      await _shapesCollection(roomId).doc(shapeId).update({
-        'isDeleted': true,
-      });
+      final updates = <String, dynamic>{'isDeleted': true};
+      if (userId != null) {
+        updates['deletedAt'] = FieldValue.serverTimestamp();
+        updates['deletedBy'] = userId;
+      }
+      await _shapesCollection(roomId).doc(shapeId).update(updates);
+      if (userId != null) _auditLog.logShapeDeleted(userId, roomId, shapeId);
     } catch (e) {
       debugPrint('도형 삭제 실패: $e');
+    }
+  }
+
+  /// 도형 복구 (Undo/Redo용)
+  Future<void> restoreShape(String roomId, String shapeId) async {
+    try {
+      await _shapesCollection(roomId).doc(shapeId).update({
+        'isDeleted': false,
+      });
+    } catch (e) {
+      debugPrint('도형 복구 실패: $e');
     }
   }
 

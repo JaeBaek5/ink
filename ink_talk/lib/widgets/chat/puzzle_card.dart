@@ -23,6 +23,7 @@ class PuzzleCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
     final unreadCount = room.members[currentUserId]?.unreadCount ?? 0;
     final lastEventIcon = _getEventIcon(room.lastEventType);
 
@@ -31,7 +32,7 @@ class PuzzleCard extends StatelessWidget {
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: const BorderSide(color: AppColors.border),
+        side: BorderSide(color: colorScheme.outline),
       ),
       child: InkWell(
         onTap: onTap,
@@ -42,7 +43,7 @@ class PuzzleCard extends StatelessWidget {
           child: Row(
             children: [
               // 프로필 이미지 + 퍼즐 타일 미리보기
-              _buildProfileWithPreview(),
+              _buildProfileWithPreview(context),
 
               const SizedBox(width: 12),
 
@@ -57,10 +58,10 @@ class PuzzleCard extends StatelessWidget {
                         Expanded(
                           child: Text(
                             displayName,
-                            style: const TextStyle(
+                            style: TextStyle(
                               fontWeight: FontWeight.w600,
                               fontSize: 16,
-                              color: AppColors.ink,
+                              color: colorScheme.onSurface,
                             ),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -69,8 +70,8 @@ class PuzzleCard extends StatelessWidget {
                         if (room.type == RoomType.group)
                           Text(
                             ' ${room.memberIds.length}',
-                            style: const TextStyle(
-                              color: AppColors.mutedGray,
+                            style: TextStyle(
+                              color: colorScheme.onSurfaceVariant,
                               fontSize: 14,
                             ),
                           ),
@@ -86,7 +87,7 @@ class PuzzleCard extends StatelessWidget {
                           Icon(
                             lastEventIcon,
                             size: 14,
-                            color: AppColors.mutedGray,
+                            color: colorScheme.onSurfaceVariant,
                           ),
                           const SizedBox(width: 4),
                         ],
@@ -95,8 +96,8 @@ class PuzzleCard extends StatelessWidget {
                             room.lastEventPreview ?? '새 채팅방',
                             style: TextStyle(
                               color: unreadCount > 0
-                                  ? AppColors.ink
-                                  : AppColors.mutedGray,
+                                  ? colorScheme.onSurface
+                                  : colorScheme.onSurfaceVariant,
                               fontSize: 14,
                               fontWeight: unreadCount > 0
                                   ? FontWeight.w500
@@ -120,8 +121,8 @@ class PuzzleCard extends StatelessWidget {
                 children: [
                   Text(
                     _formatTime(room.lastActivityAt),
-                    style: const TextStyle(
-                      color: AppColors.mutedGray,
+                    style: TextStyle(
+                      color: colorScheme.onSurfaceVariant,
                       fontSize: 12,
                     ),
                   ),
@@ -137,7 +138,8 @@ class PuzzleCard extends StatelessWidget {
   }
 
   /// 프로필 이미지 + 퍼즐 타일 미리보기
-  Widget _buildProfileWithPreview() {
+  Widget _buildProfileWithPreview(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
     return Stack(
       children: [
         // 메인 프로필
@@ -146,11 +148,13 @@ class PuzzleCard extends StatelessWidget {
           backgroundImage: displayImage != null ? NetworkImage(displayImage!) : null,
           backgroundColor: room.type == RoomType.group
               ? AppColors.gold
-              : AppColors.mutedGray,
+              : colorScheme.surfaceContainerHighest,
           child: displayImage == null
               ? Icon(
                   room.type == RoomType.group ? Icons.group : Icons.person,
-                  color: Colors.white,
+                  color: room.type == RoomType.group
+                      ? Colors.white
+                      : colorScheme.onSurfaceVariant,
                   size: 24,
                 )
               : null,
@@ -165,12 +169,12 @@ class PuzzleCard extends StatelessWidget {
               width: 20,
               height: 20,
               decoration: BoxDecoration(
-                color: AppColors.paper,
+                color: colorScheme.surfaceContainerHighest,
                 borderRadius: BorderRadius.circular(4),
-                border: Border.all(color: AppColors.border),
+                border: Border.all(color: colorScheme.outline),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.1),
+                    color: colorScheme.shadow.withValues(alpha: 0.1),
                     blurRadius: 2,
                     offset: const Offset(0, 1),
                   ),

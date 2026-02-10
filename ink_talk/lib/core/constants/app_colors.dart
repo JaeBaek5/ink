@@ -21,6 +21,9 @@ class AppColors {
   /// 구분선/테두리 (연한 선)
   static const Color border = Color(0xFFE5E7EB);
 
+  /// 미디어 활성화(선택·크기조정) 테두리/핸들
+  static const Color mediaActive = Color(0xFF22C55E);
+
   // ========== 다크 모드 ==========
   
   /// 다크 배경

@@ -6,6 +6,8 @@ enum FriendStatus {
   pending,
   /// 친구 수락됨
   accepted,
+  /// 요청 거절됨 (보낸 사용자가 확인 가능)
+  rejected,
   /// 차단됨
   blocked,
 }
@@ -19,6 +21,13 @@ class FriendModel {
   final String? nickname; // 친구에게 설정한 별명
   final DateTime createdAt;
   final DateTime? acceptedAt;
+  /// 삭제(숨김) 여부. true면 목록에 안 보임. DB에는 보관(관리자 확인용).
+  final bool hidden;
+  final DateTime? hiddenAt;
+  /// 숨김 처리한 사용자 uid (관리자 확인/복구용)
+  final String? hiddenBy;
+  /// 차단한 시각 (차단 기간 중 받은 메시지 필터/카운트용)
+  final DateTime? blockedAt;
 
   FriendModel({
     required this.id,
@@ -28,6 +37,10 @@ class FriendModel {
     this.nickname,
     required this.createdAt,
     this.acceptedAt,
+    this.hidden = false,
+    this.hiddenAt,
+    this.hiddenBy,
+    this.blockedAt,
   });
 
   factory FriendModel.fromFirestore(DocumentSnapshot doc) {
@@ -43,6 +56,10 @@ class FriendModel {
       nickname: data['nickname'],
       createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
       acceptedAt: (data['acceptedAt'] as Timestamp?)?.toDate(),
+      hidden: data['hidden'] == true,
+      hiddenAt: (data['hiddenAt'] as Timestamp?)?.toDate(),
+      hiddenBy: data['hiddenBy'] as String?,
+      blockedAt: (data['blockedAt'] as Timestamp?)?.toDate(),
     );
   }
 
@@ -54,6 +71,9 @@ class FriendModel {
       'nickname': nickname,
       'createdAt': Timestamp.fromDate(createdAt),
       'acceptedAt': acceptedAt != null ? Timestamp.fromDate(acceptedAt!) : null,
+      if (hidden) 'hidden': true,
+      if (hiddenAt != null) 'hiddenAt': Timestamp.fromDate(hiddenAt!),
+      if (hiddenBy != null) 'hiddenBy': hiddenBy,
     };
   }
 }

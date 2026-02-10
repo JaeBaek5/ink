@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../../core/constants/app_colors.dart';
+import '../../providers/auth_provider.dart';
+import '../../providers/friend_provider.dart';
+import '../../providers/room_provider.dart';
 import '../../widgets/layouts/adaptive_scaffold.dart';
 
 // 탭 화면들
@@ -18,6 +22,19 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 1; // 채팅 탭이 기본
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final authProvider = context.read<AuthProvider>();
+      final userId = authProvider.user?.uid;
+      if (userId != null) {
+        context.read<RoomProvider>().initialize(userId);
+        context.read<FriendProvider>().initialize(userId);
+      }
+    });
+  }
 
   final List<Widget> _screens = const [
     FriendsTab(),

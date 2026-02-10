@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../../core/constants/app_colors.dart';
 import '../../models/room_model.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/friend_provider.dart';
 import '../../providers/room_provider.dart';
 import '../../services/export_service.dart';
 import '../../services/network_connectivity_service.dart';
@@ -44,6 +45,19 @@ class _CanvasScreenState extends State<CanvasScreen> {
     }
   }
 
+  Future<void> _applyDefaultPenSettings() async {
+    final settings = SettingsService();
+    final colorValue = await settings.getDefaultPenColorValue();
+    final width = await settings.getDefaultPenWidth();
+    if (!mounted) return;
+    Color? color;
+    if (colorValue != null) color = Color(colorValue);
+    _canvasController.applyDefaultPenSettings(
+      color: color,
+      width: width,
+    );
+  }
+
   @override
   void initState() {
     super.initState();
@@ -62,14 +76,37 @@ class _CanvasScreenState extends State<CanvasScreen> {
         final expandMode = widget.room.canvasExpandMode == 'free'
             ? CanvasExpandMode.free
             : CanvasExpandMode.rectangular;
+        String? blockedUserId;
+        DateTime? blockedAt;
+        if (widget.room.type == RoomType.direct &&
+            widget.room.memberIds.length == 2) {
+          final otherId = widget.room.memberIds
+              .firstWhere((id) => id != userId, orElse: () => '');
+          if (otherId.isNotEmpty) {
+            final blockedList = context
+                .read<FriendProvider>()
+                .blockedUsers
+                .where((b) => b.friendId == otherId)
+                .toList();
+            final blocked = blockedList.isNotEmpty ? blockedList.first : null;
+            if (blocked != null && blocked.blockedAt != null) {
+              blockedUserId = otherId;
+              blockedAt = blocked.blockedAt;
+            }
+          }
+        }
         _canvasController.initialize(
           widget.room.id,
           userId,
           userName: userName,
           canvasExpandMode: expandMode,
+          blockedUserId: blockedUserId,
+          blockedAt: blockedAt,
         );
         _isInitialized = true;
         context.read<NetworkConnectivityService>().addListener(_onNetworkChanged);
+        // 저장된 기본 펜 설정 적용
+        _applyDefaultPenSettings();
 
         // 태그 원본 점프
         if (widget.jumpToPosition != null) {
@@ -149,6 +186,29 @@ class _CanvasScreenState extends State<CanvasScreen> {
           ],
         ),
         actions: [
+          // Undo / Redo (문서 스펙: 상단 바)
+          ListenableBuilder(
+            listenable: _canvasController,
+            builder: (_, __) {
+              final canUndo = _canvasController.canUndo;
+              final canRedo = _canvasController.canRedo;
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.undo),
+                    onPressed: canUndo ? () => _canvasController.undo() : null,
+                    tooltip: '되돌리기',
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.redo),
+                    onPressed: canRedo ? () => _canvasController.redo() : null,
+                    tooltip: '다시 실행',
+                  ),
+                ],
+              );
+            },
+          ),
           // 멤버 수
           if (widget.room.type == RoomType.group)
             Padding(
@@ -247,36 +307,28 @@ class _CanvasScreenState extends State<CanvasScreen> {
               ListenableBuilder(
                 listenable: _canvasController,
                 builder: (_, __) {
-                  final showBanner =
-                      !network.isOnline || _canvasController.hasPendingQueue;
+                  final showBanner = !network.isOnline || _canvasController.hasPendingQueue;
                   return SizedBox(height: showBanner ? 52 : 0);
                 },
               ),
-              // 펜 툴바 (상단 중앙)
               ListenableBuilder(
                 listenable: _canvasController,
-                builder: (context, _) {
-                  return PenToolbar(
-                    controller: _canvasController,
-                    canEditShapes: widget.room.canEditShapes,
-                  );
-                },
+                builder: (context, _) => PenToolbar(
+                  controller: _canvasController,
+                  canEditShapes: widget.room.canEditShapes,
+                ),
               ),
-
-              // 캔버스
               Expanded(
                 child: ListenableBuilder(
                   listenable: _canvasController,
-                  builder: (context, _) {
-                    return DrawingCanvas(
-                      controller: _canvasController,
-                      userId: userId,
-                      roomId: widget.room.id,
-                      logPublic: widget.room.logPublic,
-                      repaintBoundaryKey: _canvasRepaintKey,
-                      highlightTagArea: _highlightTagArea,
-                    );
-                  },
+                  builder: (context, _) => DrawingCanvas(
+                    controller: _canvasController,
+                    userId: userId,
+                    roomId: widget.room.id,
+                    logPublic: widget.room.logPublic,
+                    repaintBoundaryKey: _canvasRepaintKey,
+                    highlightTagArea: _highlightTagArea,
+                  ),
                 ),
               ),
             ],
@@ -314,8 +366,9 @@ class _CanvasScreenState extends State<CanvasScreen> {
 
   /// 좌측 하단 확대/축소 버튼 (- 100% +)
   Widget _buildZoomControl(BuildContext context) {
-    final size = MediaQuery.sizeOf(context);
-    final viewportCenter = Offset(size.width / 2, size.height / 2);
+    final screenSize = MediaQuery.sizeOf(context);
+    // 캔버스 뷰포트 중심을 초점으로 사용해야 줌 시 사진이 어긋나지 않음
+    final viewportCenter = _canvasController.getZoomFocalPoint(screenSize);
 
     return ListenableBuilder(
       listenable: _canvasController,
@@ -490,12 +543,76 @@ class _CanvasScreenState extends State<CanvasScreen> {
                   _showExportDialog();
                 },
               ),
+              const Divider(),
+              ListTile(
+                leading: const Icon(Icons.exit_to_app, color: Colors.red),
+                title: Text(
+                  widget.room.type == RoomType.direct ? '채팅방 삭제' : '채팅방 나가기',
+                  style: const TextStyle(color: Colors.red),
+                ),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showLeaveRoomConfirm(context);
+                },
+              ),
               const SizedBox(height: 16),
             ],
           ),
         );
       },
     );
+  }
+
+  /// 채팅방 나가기 확인 후 실행
+  Future<void> _showLeaveRoomConfirm(BuildContext context) async {
+    final authProvider = context.read<AuthProvider>();
+    final roomProvider = context.read<RoomProvider>();
+    final userId = authProvider.user?.uid;
+    if (userId == null) return;
+
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(
+          widget.room.type == RoomType.direct ? '채팅방 삭제' : '채팅방 나가기',
+        ),
+        content: Text(
+          widget.room.type == RoomType.direct
+              ? '이 채팅방을 삭제하시겠습니까?\n대화 내용이 모두 삭제됩니다.'
+              : '이 채팅방을 나가시겠습니까?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('취소'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(
+              widget.room.type == RoomType.direct ? '삭제' : '나가기',
+              style: const TextStyle(color: Colors.red),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirm != true || !context.mounted) return;
+
+    final success = await roomProvider.leaveRoom(widget.room.id, userId);
+    if (!context.mounted) return;
+    if (success) {
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('채팅방을 나갔습니다.')),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(roomProvider.errorMessage ?? '나가기 실패'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   /// 링크 공유

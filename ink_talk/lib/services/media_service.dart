@@ -1,15 +1,19 @@
 import 'dart:io';
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
 import '../models/media_model.dart';
+import 'audit_log_service.dart';
 
 /// 미디어 서비스
 class MediaService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseStorage _storage = FirebaseStorage.instance;
+  final AuditLogService _auditLog = AuditLogService();
   final ImagePicker _imagePicker = ImagePicker();
 
   /// 미디어 컬렉션 참조
@@ -79,6 +83,17 @@ class MediaService {
     }
   }
 
+  /// 이미지 바이트에서 너비·높이만 조회 (디코딩 없이)
+  static Future<({int width, int height})> getImageDimensions(Uint8List bytes) async {
+    final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
+    final descriptor = await ui.ImageDescriptor.encoded(buffer);
+    try {
+      return (width: descriptor.width, height: descriptor.height);
+    } finally {
+      descriptor.dispose();
+    }
+  }
+
   /// 이미지 파일 업로드 (XFile — path가 null이어도 바이트로 업로드)
   Future<String> uploadImageFile({
     required String roomId,
@@ -87,12 +102,26 @@ class MediaService {
     try {
       final bytes = await imageFile.readAsBytes();
       final name = imageFile.name.isNotEmpty ? imageFile.name : 'image.jpg';
+      return uploadImageBytes(roomId: roomId, bytes: bytes, fileName: name);
+    } catch (e) {
+      debugPrint('이미지 업로드 실패: $e');
+      rethrow;
+    }
+  }
+
+  /// 이미지 바이트 업로드 (한 번 읽은 바이트로 업로드·크기 조회 시 중복 읽기 방지)
+  Future<String> uploadImageBytes({
+    required String roomId,
+    required Uint8List bytes,
+    required String fileName,
+  }) async {
+    try {
+      final name = fileName.isNotEmpty ? fileName : 'image.jpg';
       final ref = _storage.ref().child('rooms/$roomId/media/${DateTime.now().millisecondsSinceEpoch}_$name');
       final uploadTask = ref.putData(
         bytes,
         SettableMetadata(contentType: 'image/jpeg'),
       );
-
       final snapshot = await uploadTask;
       return await snapshot.ref.getDownloadURL();
     } catch (e) {
@@ -105,6 +134,7 @@ class MediaService {
   Future<String> saveMedia(MediaModel media) async {
     try {
       final docRef = await _mediaCollection(media.roomId).add(media.toFirestore());
+      _auditLog.logMediaCreated(media.senderId, media.roomId, docRef.id);
       return docRef.id;
     } catch (e) {
       debugPrint('미디어 저장 실패: $e');
@@ -118,6 +148,11 @@ class MediaService {
     double? y,
     double? width,
     double? height,
+    double? angleDegrees,
+    double? skewXDegrees,
+    double? skewYDegrees,
+    bool? flipHorizontal,
+    bool? flipVertical,
     double? opacity,
     int? zIndex,
     bool? isLocked,
@@ -128,6 +163,11 @@ class MediaService {
       if (y != null) updates['y'] = y;
       if (width != null) updates['width'] = width;
       if (height != null) updates['height'] = height;
+      if (angleDegrees != null) updates['angle'] = angleDegrees;
+      if (skewXDegrees != null) updates['skewX'] = skewXDegrees;
+      if (skewYDegrees != null) updates['skewY'] = skewYDegrees;
+      if (flipHorizontal != null) updates['flipH'] = flipHorizontal;
+      if (flipVertical != null) updates['flipV'] = flipVertical;
       if (opacity != null) updates['opacity'] = opacity;
       if (zIndex != null) updates['zIndex'] = zIndex;
       if (isLocked != null) updates['isLocked'] = isLocked;
@@ -140,14 +180,29 @@ class MediaService {
     }
   }
 
-  /// 미디어 삭제 (소프트 삭제)
-  Future<void> deleteMedia(String roomId, String mediaId) async {
+  /// 미디어 삭제 (소프트 삭제). deletedAt, deletedBy 기록 → 운영자 복구 가능.
+  Future<void> deleteMedia(String roomId, String mediaId, {String? userId}) async {
     try {
-      await _mediaCollection(roomId).doc(mediaId).update({
-        'isDeleted': true,
-      });
+      final updates = <String, dynamic>{'isDeleted': true};
+      if (userId != null) {
+        updates['deletedAt'] = FieldValue.serverTimestamp();
+        updates['deletedBy'] = userId;
+      }
+      await _mediaCollection(roomId).doc(mediaId).update(updates);
+      if (userId != null) _auditLog.logMediaDeleted(userId, roomId, mediaId);
     } catch (e) {
       debugPrint('미디어 삭제 실패: $e');
+    }
+  }
+
+  /// 미디어 복구 (Undo/Redo용)
+  Future<void> restoreMedia(String roomId, String mediaId) async {
+    try {
+      await _mediaCollection(roomId).doc(mediaId).update({
+        'isDeleted': false,
+      });
+    } catch (e) {
+      debugPrint('미디어 복구 실패: $e');
     }
   }
 

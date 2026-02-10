@@ -22,12 +22,15 @@ class RoomMember {
   final MemberRole role;
   final DateTime joinedAt;
   final int unreadCount;
+  /// 나가기 시각. 설정되면 해당 사용자에게는 채팅방이 안 보임. DB에는 보관.
+  final DateTime? leftAt;
 
   RoomMember({
     required this.userId,
     required this.role,
     required this.joinedAt,
     this.unreadCount = 0,
+    this.leftAt,
   });
 
   factory RoomMember.fromMap(Map<String, dynamic> map) {
@@ -39,6 +42,7 @@ class RoomMember {
       ),
       joinedAt: (map['joinedAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
       unreadCount: map['unreadCount'] ?? 0,
+      leftAt: (map['leftAt'] as Timestamp?)?.toDate(),
     );
   }
 
@@ -48,6 +52,7 @@ class RoomMember {
       'role': role.name,
       'joinedAt': Timestamp.fromDate(joinedAt),
       'unreadCount': unreadCount,
+      if (leftAt != null) 'leftAt': Timestamp.fromDate(leftAt!),
     };
   }
 }
@@ -64,6 +69,8 @@ class RoomModel {
   final DateTime lastActivityAt;
   final String? lastEventType; // stroke, text, image, video, pdf
   final String? lastEventPreview;
+  /// 마지막 이벤트 미리보기용 URL (이미지/영상 썸네일 등)
+  final String? lastEventUrl;
   /// 방장 설정: 멤버의 캔버스 내보내기 허용 여부
   final bool exportAllowed;
   /// 방장 설정: 내보내기 시 워터마크 필수 여부
@@ -86,12 +93,19 @@ class RoomModel {
     required this.lastActivityAt,
     this.lastEventType,
     this.lastEventPreview,
+    this.lastEventUrl,
     this.exportAllowed = true,
     this.watermarkForced = false,
     this.logPublic = true,
     this.canEditShapes = true,
     this.canvasExpandMode,
   });
+
+  static String? _safeString(dynamic v) {
+    if (v == null) return null;
+    if (v is String) return v;
+    return v.toString();
+  }
 
   factory RoomModel.fromFirestore(DocumentSnapshot doc) {
     final data = doc.data() as Map<String, dynamic>;
@@ -115,6 +129,7 @@ class RoomModel {
       lastActivityAt: (data['lastActivityAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
       lastEventType: data['lastEventType'],
       lastEventPreview: data['lastEventPreview'],
+      lastEventUrl: _safeString(data['lastEventUrl']),
       exportAllowed: data['exportAllowed'] ?? true,
       watermarkForced: data['watermarkForced'] ?? false,
       logPublic: data['logPublic'] ?? true,
@@ -134,6 +149,7 @@ class RoomModel {
       'lastActivityAt': Timestamp.fromDate(lastActivityAt),
       'lastEventType': lastEventType,
       'lastEventPreview': lastEventPreview,
+      if (lastEventUrl != null) 'lastEventUrl': lastEventUrl,
       'exportAllowed': exportAllowed,
       'watermarkForced': watermarkForced,
       'logPublic': logPublic,
@@ -161,6 +177,7 @@ class RoomModel {
       lastActivityAt: lastActivityAt,
       lastEventType: lastEventType,
       lastEventPreview: lastEventPreview,
+      lastEventUrl: this.lastEventUrl,
       exportAllowed: exportAllowed ?? this.exportAllowed,
       watermarkForced: watermarkForced ?? this.watermarkForced,
       logPublic: logPublic ?? this.logPublic,
