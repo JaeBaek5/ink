@@ -225,6 +225,18 @@ class RoomProvider extends ChangeNotifier {
     await _roomService.markAsRead(roomId, userId);
   }
 
+  /// 캔버스 초기화 (방장 전용)
+  Future<bool> resetCanvas(String roomId, String userId) async {
+    try {
+      await _roomService.resetCanvas(roomId, userId);
+      return true;
+    } catch (e) {
+      _errorMessage = e.toString().replaceAll('Exception: ', '');
+      notifyListeners();
+      return false;
+    }
+  }
+
   /// 에러 초기화
   void clearError() {
     _errorMessage = null;

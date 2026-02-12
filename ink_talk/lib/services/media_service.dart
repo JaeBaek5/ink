@@ -1,11 +1,14 @@
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
+
+import 'dart:ui' show Rect;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/foundation.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:video_thumbnail/video_thumbnail.dart';
 import '../models/media_model.dart';
 import 'audit_log_service.dart';
 
@@ -21,7 +24,18 @@ class MediaService {
     return _firestore.collection('rooms').doc(roomId).collection('media');
   }
 
-  /// 미디어 실시간 스트림
+  /// 미디어 1회 로드 (캔버스 진입 시 Firestore Read 1회, 실시간은 RTDB로)
+  Future<List<MediaModel>> getMedia(String roomId) async {
+    final snapshot = await _mediaCollection(roomId).get();
+    final media = snapshot.docs
+        .map((doc) => MediaModel.fromFirestore(doc))
+        .where((m) => !m.isDeleted)
+        .toList();
+    media.sort((a, b) => a.zIndex.compareTo(b.zIndex));
+    return media;
+  }
+
+  /// 미디어 실시간 스트림 (레거시; 실시간은 RTDB 사용 권장)
   Stream<List<MediaModel>> getMediaStream(String roomId) {
     return _mediaCollection(roomId)
         .snapshots()
@@ -30,7 +44,6 @@ class MediaService {
           .map((doc) => MediaModel.fromFirestore(doc))
           .where((m) => !m.isDeleted)
           .toList();
-      // zIndex 순 정렬 (클라이언트)
       media.sort((a, b) => a.zIndex.compareTo(b.zIndex));
       return media;
     });
@@ -52,6 +65,28 @@ class MediaService {
       source: ImageSource.gallery,
       maxDuration: const Duration(minutes: 5),
     );
+  }
+
+  /// 영상 파일에서 썸네일 이미지 바이트 생성 (영상 확인용). 실패 시 null.
+  static Future<Uint8List?> getVideoThumbnailBytes(
+    String videoFilePath, {
+    int timeMs = 500,
+    int maxWidth = 512,
+    int quality = 85,
+  }) async {
+    try {
+      final bytes = await VideoThumbnail.thumbnailData(
+        video: videoFilePath,
+        imageFormat: ImageFormat.JPEG,
+        maxWidth: maxWidth,
+        quality: quality,
+        timeMs: timeMs,
+      );
+      return bytes;
+    } catch (e) {
+      debugPrint('영상 썸네일 생성 실패: $e');
+      return null;
+    }
   }
 
   /// PDF 선택
@@ -156,6 +191,8 @@ class MediaService {
     double? opacity,
     int? zIndex,
     bool? isLocked,
+    Rect? cropRect,
+    bool clearCrop = false,
   }) async {
     try {
       final updates = <String, dynamic>{};
@@ -171,7 +208,17 @@ class MediaService {
       if (opacity != null) updates['opacity'] = opacity;
       if (zIndex != null) updates['zIndex'] = zIndex;
       if (isLocked != null) updates['isLocked'] = isLocked;
-
+      if (cropRect != null) {
+        updates['cropL'] = cropRect.left;
+        updates['cropT'] = cropRect.top;
+        updates['cropR'] = cropRect.right;
+        updates['cropB'] = cropRect.bottom;
+      } else if (clearCrop) {
+        updates['cropL'] = null;
+        updates['cropT'] = null;
+        updates['cropR'] = null;
+        updates['cropB'] = null;
+      }
       if (updates.isNotEmpty) {
         await _mediaCollection(roomId).doc(mediaId).update(updates);
       }

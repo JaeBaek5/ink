@@ -28,7 +28,18 @@ class TextService {
     }
   }
 
-  /// 텍스트 실시간 스트림
+  /// 텍스트 1회 로드 (캔버스 진입 시 Firestore Read 1회, 실시간은 RTDB로)
+  Future<List<MessageModel>> getTexts(String roomId) async {
+    final snapshot = await _textsCollection(roomId).get();
+    final texts = snapshot.docs
+        .map((doc) => MessageModel.fromFirestore(doc))
+        .where((text) => !text.isDeleted)
+        .toList();
+    texts.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    return texts;
+  }
+
+  /// 텍스트 실시간 스트림 (레거시; 실시간은 RTDB 사용 권장)
   Stream<List<MessageModel>> getTextsStream(String roomId) {
     return _textsCollection(roomId)
         .snapshots()
@@ -37,7 +48,6 @@ class TextService {
           .map((doc) => MessageModel.fromFirestore(doc))
           .where((text) => !text.isDeleted)
           .toList();
-      // 시간순 정렬 (클라이언트)
       texts.sort((a, b) => a.createdAt.compareTo(b.createdAt));
       return texts;
     });

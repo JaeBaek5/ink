@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../../core/constants/app_colors.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/friend_provider.dart';
 import '../../providers/room_provider.dart';
@@ -73,34 +72,7 @@ class _HomeScreenState extends State<HomeScreen> {
       onTabChanged: (index) => setState(() => _currentIndex = index),
       screens: _screens,
       tabItems: _tabItems,
-      // 상세 뷰는 나중에 채팅방 선택 시 표시
-      detailView: _buildDetailPlaceholder(),
     );
   }
 
-  /// 상세 뷰 플레이스홀더 (패드 우측 패널)
-  Widget _buildDetailPlaceholder() {
-    return const Scaffold(
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              Icons.chat_bubble_outline,
-              size: 64,
-              color: AppColors.mutedGray,
-            ),
-            SizedBox(height: 16),
-            Text(
-              '채팅방을 선택하세요',
-              style: TextStyle(
-                color: AppColors.mutedGray,
-                fontSize: 16,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:material_symbols_icons/symbols.dart';
 import '../../core/constants/app_colors.dart';
 import '../../screens/canvas/canvas_controller.dart';
 
@@ -29,12 +30,12 @@ class ToolDock extends StatelessWidget {
       child: ListView(
         padding: const EdgeInsets.symmetric(vertical: 8),
         children: [
-          _tool(Icons.edit, '펜', () => controller.selectPen(PenType.pen1), controller.currentPen == PenType.pen1),
-          _tool(Icons.create, '연필', () => controller.selectPen(PenType.pen2), controller.currentPen == PenType.pen2),
-          _tool(Icons.brush_outlined, '만년필', () => controller.selectPen(PenType.fountain), controller.currentPen == PenType.fountain),
-          _tool(Icons.brush, '브러시', () => controller.selectPen(PenType.brush), controller.currentPen == PenType.brush),
-          _tool(Icons.highlight, '형광펜', () => controller.selectPen(PenType.highlighter), controller.currentPen == PenType.highlighter),
-          _tool(Icons.auto_fix_off, '지우개', () => controller.selectPen(PenType.eraser), controller.currentPen == PenType.eraser),
+          _tool(Symbols.stylus_pen, '펜', () => controller.selectPen(PenType.pen1), controller.currentPen == PenType.pen1),
+          _tool(Symbols.stylus_pencil, '연필', () => controller.selectPen(PenType.pen2), controller.currentPen == PenType.pen2),
+          _tool(Symbols.stylus_fountain_pen, '만년필', () => controller.selectPen(PenType.fountain), controller.currentPen == PenType.fountain),
+          _tool(Symbols.stylus_brush, '브러시', () => controller.selectPen(PenType.brush), controller.currentPen == PenType.brush),
+          _tool(Symbols.ink_highlighter, '형광펜', () => controller.selectPen(PenType.highlighter), controller.currentPen == PenType.highlighter),
+          _tool(Symbols.ink_eraser, '지우개', () => controller.selectPen(PenType.eraser), controller.currentPen == PenType.eraser),
           const Divider(height: 24),
           _tool(Icons.crop_square, '선택', () => controller.selectSelectionTool(controller.selectionTool == SelectionTool.rectangle ? SelectionTool.none : SelectionTool.rectangle), controller.selectionTool == SelectionTool.rectangle),
           _tool(Icons.gesture, '올가미', () => controller.selectSelectionTool(controller.selectionTool == SelectionTool.lasso ? SelectionTool.none : SelectionTool.lasso), controller.selectionTool == SelectionTool.lasso),

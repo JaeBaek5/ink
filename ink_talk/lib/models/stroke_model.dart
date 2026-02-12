@@ -86,14 +86,38 @@ class StrokeModel {
 
   factory StrokeModel.fromFirestore(DocumentSnapshot doc) {
     final data = doc.data() as Map<String, dynamic>;
-    
+    return StrokeModel.fromMap(data, id: doc.id);
+  }
+
+  /// RTDB 이벤트 payload용 (createdAt = millis)
+  factory StrokeModel.fromRtdbMap(Map<String, dynamic> data, {String? id}) {
     final pointsData = data['points'] as List<dynamic>? ?? [];
     final points = pointsData
         .map((p) => StrokePoint.fromMap(p as Map<String, dynamic>))
         .toList();
-
+    final createdAt = data['createdAt'];
+    final createdAtDt = createdAt is int
+        ? DateTime.fromMillisecondsSinceEpoch(createdAt)
+        : (createdAt is Timestamp ? createdAt.toDate() : DateTime.now());
     return StrokeModel(
-      id: doc.id,
+      id: id ?? data['id']?.toString() ?? '',
+      roomId: data['roomId'] ?? '',
+      senderId: data['senderId'] ?? '',
+      points: points,
+      style: PenStyle.fromMap(data['style'] as Map<String, dynamic>? ?? {}),
+      createdAt: createdAtDt,
+      isConfirmed: data['isConfirmed'] ?? false,
+      isDeleted: data['isDeleted'] ?? false,
+    );
+  }
+
+  static StrokeModel fromMap(Map<String, dynamic> data, {String? id}) {
+    final pointsData = data['points'] as List<dynamic>? ?? [];
+    final points = pointsData
+        .map((p) => StrokePoint.fromMap(p as Map<String, dynamic>))
+        .toList();
+    return StrokeModel(
+      id: id ?? data['id']?.toString() ?? '',
       roomId: data['roomId'] ?? '',
       senderId: data['senderId'] ?? '',
       points: points,
@@ -114,5 +138,13 @@ class StrokeModel {
       'isConfirmed': isConfirmed,
       'isDeleted': isDeleted,
     };
+  }
+
+  /// RTDB 이벤트 payload (createdAt = millis)
+  Map<String, dynamic> toRtdbPayload() {
+    final m = toFirestore();
+    m['id'] = id;
+    m['createdAt'] = createdAt.millisecondsSinceEpoch;
+    return m;
   }
 }

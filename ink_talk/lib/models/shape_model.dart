@@ -71,8 +71,45 @@ class ShapeModel {
 
   factory ShapeModel.fromFirestore(DocumentSnapshot doc) {
     final data = doc.data() as Map<String, dynamic>;
+    return ShapeModel.fromMap(data, id: doc.id);
+  }
+
+  /// RTDB 이벤트 payload용 (createdAt = millis)
+  factory ShapeModel.fromRtdbMap(Map<String, dynamic> data, {String? id}) {
+    final createdAt = data['createdAt'];
+    final createdAtDt = createdAt is int
+        ? DateTime.fromMillisecondsSinceEpoch(createdAt)
+        : (createdAt is Timestamp ? createdAt.toDate() : DateTime.now());
     return ShapeModel(
-      id: doc.id,
+      id: id ?? data['id']?.toString() ?? '',
+      roomId: data['roomId'] ?? '',
+      senderId: data['senderId'] ?? '',
+      type: ShapeType.values.firstWhere(
+        (e) => e.name == data['type'],
+        orElse: () => ShapeType.rectangle,
+      ),
+      startX: (data['startX'] as num?)?.toDouble() ?? 0,
+      startY: (data['startY'] as num?)?.toDouble() ?? 0,
+      endX: (data['endX'] as num?)?.toDouble() ?? 0,
+      endY: (data['endY'] as num?)?.toDouble() ?? 0,
+      strokeColor: data['strokeColor'] ?? '#000000',
+      strokeWidth: (data['strokeWidth'] as num?)?.toDouble() ?? 2.0,
+      fillColor: data['fillColor'],
+      fillOpacity: (data['fillOpacity'] as num?)?.toDouble() ?? 1.0,
+      lineStyle: LineStyle.values.firstWhere(
+        (e) => e.name == data['lineStyle'],
+        orElse: () => LineStyle.solid,
+      ),
+      isLocked: data['isLocked'] ?? false,
+      zIndex: data['zIndex'] ?? 0,
+      createdAt: createdAtDt,
+      isDeleted: data['isDeleted'] ?? false,
+    );
+  }
+
+  static ShapeModel fromMap(Map<String, dynamic> data, {String? id}) {
+    return ShapeModel(
+      id: id ?? data['id']?.toString() ?? '',
       roomId: data['roomId'] ?? '',
       senderId: data['senderId'] ?? '',
       type: ShapeType.values.firstWhere(
@@ -117,6 +154,13 @@ class ShapeModel {
       'createdAt': Timestamp.fromDate(createdAt),
       'isDeleted': isDeleted,
     };
+  }
+
+  Map<String, dynamic> toRtdbPayload() {
+    final m = toFirestore();
+    m['id'] = id;
+    m['createdAt'] = createdAt.millisecondsSinceEpoch;
+    return m;
   }
 
   ShapeModel copyWith({

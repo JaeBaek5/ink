@@ -311,13 +311,6 @@ class _CanvasScreenState extends State<CanvasScreen> {
                   return SizedBox(height: showBanner ? 52 : 0);
                 },
               ),
-              ListenableBuilder(
-                listenable: _canvasController,
-                builder: (context, _) => PenToolbar(
-                  controller: _canvasController,
-                  canEditShapes: widget.room.canEditShapes,
-                ),
-              ),
               Expanded(
                 child: ListenableBuilder(
                   listenable: _canvasController,
@@ -359,6 +352,23 @@ class _CanvasScreenState extends State<CanvasScreen> {
               },
             ),
           ),
+
+          // 펜 툴바 — 맨 위 레이어로 그리기 (다른 오버레이에 가리지 않도록)
+          ListenableBuilder(
+            listenable: _canvasController,
+            builder: (_, __) {
+              final showBanner = !network.isOnline || _canvasController.hasPendingQueue;
+              return Positioned(
+                left: 0,
+                right: 0,
+                top: showBanner ? 52 : 0,
+                child: PenToolbar(
+                  controller: _canvasController,
+                  canEditShapes: widget.room.canEditShapes,
+                ),
+              );
+            },
+          ),
         ],
       ),
     );
@@ -379,44 +389,64 @@ class _CanvasScreenState extends State<CanvasScreen> {
           borderRadius: BorderRadius.circular(24),
           elevation: 2,
           shadowColor: Colors.black26,
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.remove, color: AppColors.ink),
-                  onPressed: _canvasController.canvasScale <= 0.1
-                      ? null
-                      : () => _canvasController.zoomOut(viewportCenter),
-                  tooltip: '축소',
-                  style: IconButton.styleFrom(
-                    minimumSize: const Size(40, 40),
-                  ),
-                ),
-                SizedBox(
-                  width: 52,
-                  child: Text(
-                    '$scalePercent%',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: AppColors.ink,
+          child: SizedBox(
+            height: 28,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  SizedBox(
+                    width: 28,
+                    height: 28,
+                    child: IconButton(
+                      icon: const Icon(Icons.remove, color: AppColors.ink, size: 18),
+                      onPressed: _canvasController.canvasScale <= 0.1
+                          ? null
+                          : () => _canvasController.zoomOut(viewportCenter),
+                      tooltip: '축소',
+                      padding: EdgeInsets.zero,
+                      style: IconButton.styleFrom(
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
                     ),
                   ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.add, color: AppColors.ink),
-                  onPressed: _canvasController.canvasScale >= 5.0
-                      ? null
-                      : () => _canvasController.zoomIn(viewportCenter),
-                  tooltip: '확대',
-                  style: IconButton.styleFrom(
-                    minimumSize: const Size(40, 40),
+                  SizedBox(
+                    width: 52,
+                    height: 28,
+                    child: Center(
+                      child: Text(
+                        '$scalePercent%',
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.ink,
+                        ),
+                      ),
+                    ),
                   ),
-                ),
-              ],
+                  SizedBox(
+                    width: 28,
+                    height: 28,
+                    child: IconButton(
+                      icon: const Icon(Icons.add, color: AppColors.ink, size: 18),
+                      onPressed: _canvasController.canvasScale >= 5.0
+                          ? null
+                          : () => _canvasController.zoomIn(viewportCenter),
+                      tooltip: '확대',
+                      padding: EdgeInsets.zero,
+                      style: IconButton.styleFrom(
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
         );
@@ -449,8 +479,12 @@ class _CanvasScreenState extends State<CanvasScreen> {
               child: TextField(
                 controller: _quickTextController,
                 autofocus: true,
+                keyboardType: TextInputType.multiline,
+                maxLines: 3,
+                style: const TextStyle(color: AppColors.ink, fontSize: 16),
                 decoration: const InputDecoration(
-                  hintText: '빠른 텍스트 입력...',
+                  hintText: '빠른 텍스트 입력... (엔터: 다음 줄)',
+                  hintStyle: TextStyle(color: AppColors.mutedGray),
                   border: InputBorder.none,
                   contentPadding: EdgeInsets.symmetric(horizontal: 8),
                 ),
@@ -523,7 +557,11 @@ class _CanvasScreenState extends State<CanvasScreen> {
                 title: const Text('채팅방 설정'),
                 onTap: () {
                   Navigator.pop(context);
-                  showRoomHostSettingsSheet(context, widget.room);
+                  showRoomHostSettingsSheet(
+                    context,
+                    widget.room,
+                    onCanvasReset: () => _canvasController.clearLocalCanvasState(),
+                  );
                 },
               ),
               ListTile(

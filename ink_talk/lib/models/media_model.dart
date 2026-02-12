@@ -1,3 +1,5 @@
+import 'dart:ui';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 /// 미디어 타입
@@ -43,7 +45,10 @@ class MediaModel {
   // PDF 전용
   final int? totalPages;     // 총 페이지 수
   final int? currentPage;    // 현재 페이지 (클라이언트용, 저장 안 함)
-  
+
+  /// 이미지 자르기 영역 (정규화 0~1). null이면 전체 표시. 이미지 타입만 사용.
+  final Rect? cropRect;
+
   // 메타
   final DateTime createdAt;
   final bool isDeleted;
@@ -71,6 +76,7 @@ class MediaModel {
     this.zIndex = 0,
     this.totalPages,
     this.currentPage,
+    this.cropRect,
     required this.createdAt,
     this.isDeleted = false,
     this.isLocked = false,
@@ -78,8 +84,17 @@ class MediaModel {
 
   factory MediaModel.fromFirestore(DocumentSnapshot doc) {
     final data = doc.data() as Map<String, dynamic>;
+    return MediaModel.fromMap(data, id: doc.id);
+  }
+
+  /// RTDB 이벤트 payload용 (createdAt = millis)
+  factory MediaModel.fromRtdbMap(Map<String, dynamic> data, {String? id}) {
+    final createdAt = data['createdAt'];
+    final createdAtDt = createdAt is int
+        ? DateTime.fromMillisecondsSinceEpoch(createdAt)
+        : (createdAt is Timestamp ? createdAt.toDate() : DateTime.now());
     return MediaModel(
-      id: doc.id,
+      id: id ?? data['id']?.toString() ?? '',
       roomId: data['roomId'] ?? '',
       senderId: data['senderId'] ?? '',
       type: MediaType.values.firstWhere(
@@ -102,14 +117,56 @@ class MediaModel {
       opacity: (data['opacity'] as num?)?.toDouble() ?? 1.0,
       zIndex: (data['zIndex'] as num?)?.toInt() ?? 0,
       totalPages: data['totalPages'],
+      cropRect: _parseCropRect(data),
+      createdAt: createdAtDt,
+      isDeleted: data['isDeleted'] ?? false,
+      isLocked: data['isLocked'] ?? false,
+    );
+  }
+
+  static MediaModel fromMap(Map<String, dynamic> data, {String? id}) {
+    return MediaModel(
+      id: id ?? data['id']?.toString() ?? '',
+      roomId: data['roomId'] ?? '',
+      senderId: data['senderId'] ?? '',
+      type: MediaType.values.firstWhere(
+        (e) => e.name == data['type'],
+        orElse: () => MediaType.image,
+      ),
+      url: data['url'] ?? '',
+      fileName: data['fileName'] ?? '',
+      fileSize: data['fileSize'] ?? 0,
+      thumbnailUrl: data['thumbnailUrl'],
+      x: (data['x'] as num?)?.toDouble() ?? 0,
+      y: (data['y'] as num?)?.toDouble() ?? 0,
+      width: (data['width'] as num?)?.toDouble() ?? 200,
+      height: (data['height'] as num?)?.toDouble() ?? 200,
+      angleDegrees: (data['angle'] as num?)?.toDouble() ?? 0.0,
+      skewXDegrees: (data['skewX'] as num?)?.toDouble() ?? 0.0,
+      skewYDegrees: (data['skewY'] as num?)?.toDouble() ?? 0.0,
+      flipHorizontal: data['flipH'] == true,
+      flipVertical: data['flipV'] == true,
+      opacity: (data['opacity'] as num?)?.toDouble() ?? 1.0,
+      zIndex: (data['zIndex'] as num?)?.toInt() ?? 0,
+      totalPages: data['totalPages'],
+      cropRect: _parseCropRect(data),
       createdAt: (data['createdAt'] as Timestamp?)?.toDate() ?? DateTime.now(),
       isDeleted: data['isDeleted'] ?? false,
       isLocked: data['isLocked'] ?? false,
     );
   }
 
+  static Rect? _parseCropRect(Map<String, dynamic> data) {
+    final l = data['cropL'] as num?;
+    final t = data['cropT'] as num?;
+    final r = data['cropR'] as num?;
+    final b = data['cropB'] as num?;
+    if (l == null || t == null || r == null || b == null) return null;
+    return Rect.fromLTRB(l.toDouble(), t.toDouble(), r.toDouble(), b.toDouble());
+  }
+
   Map<String, dynamic> toFirestore() {
-    return {
+    final map = <String, dynamic>{
       'roomId': roomId,
       'senderId': senderId,
       'type': type.name,
@@ -133,6 +190,20 @@ class MediaModel {
       'isDeleted': isDeleted,
       'isLocked': isLocked,
     };
+    if (cropRect != null) {
+      map['cropL'] = cropRect!.left;
+      map['cropT'] = cropRect!.top;
+      map['cropR'] = cropRect!.right;
+      map['cropB'] = cropRect!.bottom;
+    }
+    return map;
+  }
+
+  Map<String, dynamic> toRtdbPayload() {
+    final m = toFirestore();
+    m['id'] = id;
+    m['createdAt'] = createdAt.millisecondsSinceEpoch;
+    return m;
   }
 
   MediaModel copyWith({
@@ -148,6 +219,7 @@ class MediaModel {
     double? opacity,
     int? zIndex,
     int? currentPage,
+    Rect? cropRect,
     bool? isLocked,
   }) {
     return MediaModel(
@@ -172,6 +244,7 @@ class MediaModel {
       zIndex: zIndex ?? this.zIndex,
       totalPages: totalPages,
       currentPage: currentPage ?? this.currentPage,
+      cropRect: cropRect ?? this.cropRect,
       createdAt: createdAt,
       isDeleted: isDeleted,
       isLocked: isLocked ?? this.isLocked,

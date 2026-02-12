@@ -13,7 +13,18 @@ class ShapeService {
     return _firestore.collection('rooms').doc(roomId).collection('shapes');
   }
 
-  /// 도형 실시간 스트림
+  /// 도형 1회 로드 (캔버스 진입 시 Firestore Read 1회, 실시간은 RTDB로)
+  Future<List<ShapeModel>> getShapes(String roomId) async {
+    final snapshot = await _shapesCollection(roomId).get();
+    final shapes = snapshot.docs
+        .map((doc) => ShapeModel.fromFirestore(doc))
+        .where((shape) => !shape.isDeleted)
+        .toList();
+    shapes.sort((a, b) => a.zIndex.compareTo(b.zIndex));
+    return shapes;
+  }
+
+  /// 도형 실시간 스트림 (레거시; 실시간은 RTDB 사용 권장)
   Stream<List<ShapeModel>> getShapesStream(String roomId) {
     return _shapesCollection(roomId)
         .snapshots()
@@ -22,7 +33,6 @@ class ShapeService {
           .map((doc) => ShapeModel.fromFirestore(doc))
           .where((shape) => !shape.isDeleted)
           .toList();
-      // zIndex 순 정렬 (클라이언트)
       shapes.sort((a, b) => a.zIndex.compareTo(b.zIndex));
       return shapes;
     });

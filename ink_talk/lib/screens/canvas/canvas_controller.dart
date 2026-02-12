@@ -10,6 +10,7 @@ import '../../services/text_service.dart';
 import '../../models/media_model.dart';
 import '../../services/media_service.dart';
 import '../../services/room_service.dart';
+import '../../services/rtdb_room_service.dart';
 import '../../services/settings_service.dart';
 
 /// 펜 종류 (문서 스펙: Pen, Pencil, Fountain, Brush, Highlighter + Eraser)
@@ -35,8 +36,23 @@ enum EraserMode {
   area,   // 문지른 영역만 삭제(선분 단위)
 }
 
+/// PDF 보기 방식 (길게 누르기 메뉴에서 선택)
+enum PdfViewMode {
+  /// 한 페이지 + 좌우 화살표
+  singlePage,
+  /// 여러 페이지 우측·아래로 동시 표시 (그리드)
+  grid,
+}
+
 /// Undo/Redo 항목 종류 (이동 제외, 펜·도형·사진·지우개만)
 enum _UndoEntryType { stroke, shape, media }
+
+/// 방별 캔버스 뷰 상태 (나갔다 들어와도 비율·위치 유지)
+class _SavedCanvasView {
+  final Offset offset;
+  final double scale;
+  _SavedCanvasView(this.offset, this.scale);
+}
 
 class _UndoEntry {
   final _UndoEntryType type;
@@ -45,12 +61,47 @@ class _UndoEntry {
   _UndoEntry(this.type, this.id, this.isAdd);
 }
 
+/// 업로드 중 캔버스에 표시할 플레이스홀더 (박스 + 로딩)
+class UploadingPlaceholder {
+  final String tempId;
+  final double x;
+  final double y;
+  final double width;
+  final double height;
+  final MediaType type;
+  UploadingPlaceholder({
+    required this.tempId,
+    required this.x,
+    required this.y,
+    required this.width,
+    required this.height,
+    required this.type,
+  });
+}
+
+/// 로컬 스트로크 포인트 (x, y, 필압력, 타임스탬프)
+class LocalStrokePoint {
+  final double x;
+  final double y;
+  final double pressure;
+  final int timestamp;
+
+  LocalStrokePoint({
+    required this.x,
+    required this.y,
+    this.pressure = 1.0,
+    required this.timestamp,
+  });
+
+  Offset get offset => Offset(x, y);
+}
+
 /// 로컬 스트로크 데이터 (그리는 중)
 class LocalStrokeData {
   final String id;
   final String senderId;
   final String? senderName;
-  final List<Offset> points;
+  final List<LocalStrokePoint> points;
   final Color color;
   final double strokeWidth;
   final PenType penType;
@@ -111,10 +162,13 @@ class CanvasController extends ChangeNotifier {
   final ShapeService _shapeService = ShapeService();
   final MediaService _mediaService = MediaService();
   final RoomService _roomService = RoomService();
+  final RtdbRoomService _rtdbRoom = RtdbRoomService();
   StreamSubscription<List<StrokeModel>>? _strokesSubscription;
   StreamSubscription<List<MessageModel>>? _textsSubscription;
   StreamSubscription<List<ShapeModel>>? _shapesSubscription;
   StreamSubscription<List<MediaModel>>? _mediaSubscription;
+  StreamSubscription<RoomEventBatch>? _rtdbSubscription;
+  int _rtdbJoinTime = 0;
 
   bool _disposed = false;
   bool get isDisposed => _disposed;
@@ -142,8 +196,26 @@ class CanvasController extends ChangeNotifier {
   List<MessageModel> _serverTexts = [];
   List<MessageModel> get serverTexts => _serverTexts;
 
-  // 빠른 텍스트 마지막 위치
+  // 빠른 텍스트: 마지막으로 쓴 위치 아래(다음 줄)
   Offset? _lastTextPosition;
+  /// 빠른 텍스트에서 손가락으로 탭한 위치 또는 전송 후 다음 줄 위치. null이면 탭 전(커서 미표시)
+  Offset? _quickTextCursorPosition;
+  Offset? get quickTextCursorPosition => _quickTextCursorPosition;
+  void setQuickTextCursorPosition(Offset? position) {
+    if (_quickTextCursorPosition == position) return;
+    _quickTextCursorPosition = position;
+    _notifyIfNotDisposed();
+  }
+
+  /// 위치 지정 텍스트 모드에서 손가락으로 누른 위치(캔버스 좌표). 여기에 커서 표시·글 배치
+  Offset? _textCursorPosition;
+  Offset? get textCursorPosition => _textCursorPosition;
+  void setTextCursorPosition(Offset? position) {
+    if (_textCursorPosition == position) return;
+    _textCursorPosition = position;
+    _notifyIfNotDisposed();
+  }
+  void clearTextCursorPosition() => setTextCursorPosition(null);
 
   // 도형 목록 (서버)
   List<ShapeModel> _serverShapes = [];
@@ -202,8 +274,12 @@ class CanvasController extends ChangeNotifier {
     } catch (_) {}
   }
   void clearMediaResizeMode() {
-    if (_mediaInResizeMode != null) {
-      _mediaInResizeMode = null;
+    final id = _mediaInResizeMode;
+    _mediaInResizeMode = null;
+    if (id != null) {
+      _persistMediaGeometry(id);
+      _notifyIfNotDisposed();
+    } else {
       _notifyIfNotDisposed();
     }
   }
@@ -211,6 +287,73 @@ class CanvasController extends ChangeNotifier {
   // 미디어 업로드 중
   bool _isUploading = false;
   bool get isUploading => _isUploading;
+
+  /// 업로드 중 표시용 플레이스홀더 (박스 먼저 만들고 로딩 표시)
+  final List<UploadingPlaceholder> _uploadingPlaceholders = [];
+  List<UploadingPlaceholder> get uploadingPlaceholders => List.unmodifiable(_uploadingPlaceholders);
+
+  /// 뷰포트 캔버스 크기 (화면 비율에 맞게 미디어 크기용). null이면 기본값 사용.
+  Size? _getViewportCanvasSize() {
+    final s = _viewportSize;
+    if (s == null || s.width <= 0 || s.height <= 0) return null;
+    return Size(s.width / _canvasScale, s.height / _canvasScale);
+  }
+
+  /// 화면(뷰포트) 중앙의 캔버스 좌표. 업로드 위치용.
+  Offset? _getViewportCenterInCanvas() {
+    final s = _viewportSize;
+    if (s == null || s.width <= 0 || s.height <= 0) return null;
+    final screenCenter = Offset(s.width / 2, s.height / 2);
+    return (screenCenter - _canvasOffset) / _canvasScale;
+  }
+
+  /// PDF 보기 방식 (미디어 ID별, 기본: 한 페이지 + 화살표)
+  final Map<String, PdfViewMode> _pdfViewModes = {};
+  PdfViewMode getPdfViewMode(String mediaId) =>
+      _pdfViewModes[mediaId] ?? PdfViewMode.singlePage;
+  void setPdfViewMode(String mediaId, PdfViewMode mode) {
+    if (_pdfViewModes[mediaId] == mode) return;
+    _pdfViewModes[mediaId] = mode;
+    _notifyIfNotDisposed();
+  }
+
+  /// PDF 현재 페이지 (미디어 ID별, 1-based). 화살표는 캔버스 오버레이에서 사용.
+  final Map<String, int> _pdfCurrentPage = {};
+  int getPdfPage(String mediaId) => _pdfCurrentPage[mediaId] ?? 1;
+  void setPdfPage(String mediaId, int page) {
+    final count = _pdfPageCount[mediaId];
+    final clamped = count != null ? page.clamp(1, count) : page.clamp(1, 9999);
+    if (_pdfCurrentPage[mediaId] == clamped) return;
+    _pdfCurrentPage[mediaId] = clamped;
+    _notifyIfNotDisposed();
+  }
+
+  /// PDF 총 페이지 수 (로드 후 MediaWidget에서 설정)
+  final Map<String, int> _pdfPageCount = {};
+  int? getPdfPageCount(String mediaId) => _pdfPageCount[mediaId];
+  void setPdfPageCount(String mediaId, int count) {
+    if (_pdfPageCount[mediaId] == count) return;
+    _pdfPageCount[mediaId] = count;
+    _notifyIfNotDisposed();
+  }
+
+  /// 이미지 자르기 영역 (미디어 ID별, 정규화 0~1). null이면 전체 표시.
+  final Map<String, Rect> _mediaCropRects = {};
+  Rect? getMediaCropRect(String mediaId) => _mediaCropRects[mediaId];
+  void setMediaCropRect(String mediaId, Rect? rect) {
+    if (rect == null) {
+      _mediaCropRects.remove(mediaId);
+    } else {
+      _mediaCropRects[mediaId] = rect;
+    }
+    _notifyIfNotDisposed();
+    if (_roomId == null) return;
+    if (rect != null) {
+      _mediaService.updateMedia(_roomId!, mediaId, cropRect: rect);
+    } else {
+      _mediaService.updateMedia(_roomId!, mediaId, clearCrop: true);
+    }
+  }
 
   // 현재 펜
   PenType _currentPen = PenType.pen1;
@@ -306,6 +449,8 @@ class CanvasController extends ChangeNotifier {
 
   // Undo/Redo 스택 (로컬) — 이동(pan) 제외, 펜·도형·사진·지우개만. 최대 10단계
   static const int undoRedoLimit = 10;
+  /// 방별 캔버스 뷰 저장 (나갔다 들어와도 비율·위치 유지)
+  static final Map<String, _SavedCanvasView> _roomCanvasViewState = {};
   final List<_UndoEntry> _undoStack = [];
   final List<_UndoEntry> _redoStack = [];
 
@@ -359,6 +504,19 @@ class CanvasController extends ChangeNotifier {
   int get selectedColorIndex => _selectedColorIndex;
   int get selectedWidthIndex => _selectedWidthIndex;
 
+  /// 캔버스 초기화 시 로컬 상태 비우기 (서버 삭제 후 호출)
+  void clearLocalCanvasState() {
+    _localStrokes.clear();
+    _pendingRetry.clear();
+    _ghostStrokes.clear();
+    _currentStroke = null;
+    _undoStack.clear();
+    _redoStack.clear();
+    _selectedShape = null;
+    _selectedMedia = null;
+    _notifyIfNotDisposed();
+  }
+
   /// 초기화 (채팅방 연결)
   /// [blockedUserId], [blockedAt]: 1:1에서 상대가 차단된 경우, 해당 시각 이후 상대 메시지는 표시 안 함
   void initialize(String roomId, String userId,
@@ -372,6 +530,13 @@ class CanvasController extends ChangeNotifier {
     _canvasExpandMode = canvasExpandMode;
     _blockedUserId = blockedUserId;
     _blockedAt = blockedAt;
+
+    // 이전에 나갈 때 저장해 둔 뷰 상태 복원
+    final saved = _roomCanvasViewState[roomId];
+    if (saved != null) {
+      _canvasOffset = saved.offset;
+      _canvasScale = saved.scale.clamp(0.1, 5.0);
+    }
 
     List<StrokeModel> _applyStrokeFilter(List<StrokeModel> strokes) {
       if (_blockedUserId == null || _blockedAt == null) return strokes;
@@ -391,65 +556,43 @@ class CanvasController extends ChangeNotifier {
           .toList();
     }
 
-    // 실시간 스트로크 구독
+    // Firestore 1회 로드 (실시간은 RTDB로 전환하여 Read 비용 절감)
     _strokesSubscription?.cancel();
-    _strokesSubscription = _strokeService.getStrokesStream(roomId).listen(
-      (strokes) {
-        _serverStrokes = _applyStrokeFilter(strokes);
-        // 서버에 반영된 로컬 스트로크만 제거 (사라짐 방지)
-        final serverIds = strokes.map((s) => s.id).toSet();
-        _localStrokes.removeWhere(
-          (s) => s.firestoreId != null && serverIds.contains(s.firestoreId),
-        );
-        _notifyIfNotDisposed();
-      },
-      onError: (e) {
-        debugPrint('스트로크 스트림 오류: $e');
-      },
-    );
-
-    // 실시간 텍스트 구독
     _textsSubscription?.cancel();
-    _textsSubscription = _textService.getTextsStream(roomId).listen(
-      (texts) {
-        _serverTexts = _applyTextFilter(texts);
-        _notifyIfNotDisposed();
-      },
-      onError: (e) {
-        debugPrint('텍스트 스트림 오류: $e');
-      },
-    );
-
-    // 실시간 도형 구독
     _shapesSubscription?.cancel();
-    _shapesSubscription = _shapeService.getShapesStream(roomId).listen(
-      (shapes) {
-        _serverShapes = shapes;
-        _notifyIfNotDisposed();
-      },
-      onError: (e) {
-        debugPrint('도형 스트림 오류: $e');
-      },
-    );
-
-    // 실시간 미디어 구독
     _mediaSubscription?.cancel();
-    _mediaSubscription = _mediaService.getMediaStream(roomId).listen(
-      (media) {
-        _serverMedia = media;
-        // 선택된 미디어가 이동/리사이즈 등으로 갱신되면 핸들 위치가 따라가도록 최신 객체로 교체
-        if (_selectedMedia != null) {
-          final updated = media.where((m) => m.id == _selectedMedia!.id).firstOrNull;
-          if (updated != null) _selectedMedia = updated;
-        }
-        _notifyIfNotDisposed();
-      },
-      onError: (e) {
-        debugPrint('미디어 스트림 오류: $e');
-      },
-    );
+    _rtdbSubscription?.cancel();
 
-    // 스트림 첫 수신이 첫 빌드보다 늦을 수 있어, 알림을 한 번 더 해서 진입 시 캔버스가 바로 보이도록
+    Future(() async {
+      final strokes = await _strokeService.getStrokes(roomId);
+      final texts = await _textService.getTexts(roomId);
+      final shapes = await _shapeService.getShapes(roomId);
+      final media = await _mediaService.getMedia(roomId);
+      if (_disposed) return;
+      _serverStrokes = _applyStrokeFilter(strokes);
+      _serverTexts = _applyTextFilter(texts);
+      _serverShapes = shapes;
+      _serverMedia = media;
+      _mediaCropRects.clear();
+      for (final m in media) {
+        if (m.cropRect != null) _mediaCropRects[m.id] = m.cropRect!;
+      }
+      _rtdbJoinTime = DateTime.now().millisecondsSinceEpoch - 10000;
+      if (_userId != null) {
+        await _rtdbRoom.setRoomMember(roomId, _userId!, true);
+      }
+      _rtdbSubscription = _rtdbRoom.roomEventsStream(roomId, sinceMs: _rtdbJoinTime).listen(
+        (batch) {
+          if (_disposed) return;
+          for (final e in batch.events) {
+            _applyRtdbEvent(e);
+          }
+          _notifyIfNotDisposed();
+        },
+        onError: (err) => debugPrint('RTDB 스트림 오류: $err'),
+      );
+      _notifyIfNotDisposed();
+    });
     Future.microtask(() {
       if (!_disposed) _notifyIfNotDisposed();
     });
@@ -458,18 +601,138 @@ class CanvasController extends ChangeNotifier {
     });
   }
 
-  /// 입력 모드 변경
+  void _applyRtdbEvent(RoomDeltaEvent e) {
+    switch (e.type) {
+      case 'stroke_delta':
+        final id = e.payload['id']?.toString();
+        if (id == null) return;
+        if (e.op == 'remove') {
+          _serverStrokes = _serverStrokes.where((s) => s.id != id).toList();
+          _localStrokes.removeWhere((s) => s.firestoreId == id);
+          return;
+        }
+        try {
+          if (e.op == 'update') {
+            final idx = _serverStrokes.indexWhere((s) => s.id == id);
+            if (idx >= 0) {
+              final existing = _serverStrokes[idx];
+              final updated = StrokeModel(
+                id: existing.id,
+                roomId: existing.roomId,
+                senderId: existing.senderId,
+                points: existing.points,
+                style: existing.style,
+                createdAt: existing.createdAt,
+                isConfirmed: e.payload['isConfirmed'] as bool? ?? existing.isConfirmed,
+                isDeleted: existing.isDeleted,
+              );
+              _serverStrokes = List.from(_serverStrokes)..[idx] = updated;
+            }
+          } else {
+            final stroke = StrokeModel.fromRtdbMap(e.payload);
+            final idx = _serverStrokes.indexWhere((s) => s.id == id);
+            if (idx >= 0) {
+              _serverStrokes = List.from(_serverStrokes)..[idx] = stroke;
+            } else {
+              _serverStrokes = [..._serverStrokes, stroke];
+              _serverStrokes.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+            }
+          }
+        } catch (_) {}
+        break;
+      case 'text_delta':
+        final id = e.payload['id']?.toString();
+        if (id == null) return;
+        if (e.op == 'remove') {
+          _serverTexts = _serverTexts.where((t) => t.id != id).toList();
+          return;
+        }
+        try {
+          final text = MessageModel.fromRtdbMap(e.payload);
+          final idx = _serverTexts.indexWhere((t) => t.id == id);
+          if (idx >= 0) {
+            _serverTexts = List.from(_serverTexts)..[idx] = text;
+          } else {
+            _serverTexts = [..._serverTexts, text];
+            _serverTexts.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+          }
+        } catch (_) {}
+        break;
+      case 'shape_delta':
+        final id = e.payload['id']?.toString();
+        if (id == null) return;
+        if (e.op == 'remove') {
+          _serverShapes = _serverShapes.where((s) => s.id != id).toList();
+          if (_selectedShape?.id == id) _selectedShape = null;
+          return;
+        }
+        try {
+          final shape = ShapeModel.fromRtdbMap(e.payload);
+          final idx = _serverShapes.indexWhere((s) => s.id == id);
+          if (idx >= 0) {
+            _serverShapes = List.from(_serverShapes)..[idx] = shape;
+          } else {
+            _serverShapes = [..._serverShapes, shape];
+            _serverShapes.sort((a, b) => a.zIndex.compareTo(b.zIndex));
+          }
+          if (_selectedShape?.id == id) _selectedShape = shape;
+        } catch (_) {}
+        break;
+      case 'media_delta':
+        final id = e.payload['id']?.toString();
+        if (id == null) return;
+        if (e.op == 'remove') {
+          _serverMedia = _serverMedia.where((m) => m.id != id).toList();
+          _mediaCropRects.remove(id);
+          if (_selectedMedia?.id == id) _selectedMedia = null;
+          return;
+        }
+        try {
+          final media = MediaModel.fromRtdbMap(e.payload);
+          final idx = _serverMedia.indexWhere((m) => m.id == id);
+          if (idx >= 0) {
+            _serverMedia = List.from(_serverMedia)..[idx] = media;
+          } else {
+            _serverMedia = [..._serverMedia, media];
+            _serverMedia.sort((a, b) => a.zIndex.compareTo(b.zIndex));
+          }
+          if (media.cropRect != null) _mediaCropRects[media.id] = media.cropRect!;
+          if (_selectedMedia?.id == id) _selectedMedia = media;
+        } catch (_) {}
+        break;
+      default:
+        break;
+    }
+  }
+
+  /// 입력 모드 변경 (텍스트/도형 선택 시 선택 도구 해제 → 툴바에서 모두 선택 가능)
   void setInputMode(InputMode mode) {
     _inputMode = mode;
     _selectedMedia = null;
     _selectedShape = null;
+    if (mode == InputMode.text || mode == InputMode.quickText || mode == InputMode.shape) {
+      _selectionTool = SelectionTool.none;
+    }
+    // 빠른 텍스트: 들어올 때 커서 비움(탭 후 표시), 나갈 때도 비움
+    if (mode == InputMode.quickText || mode == InputMode.pen) {
+      _quickTextCursorPosition = null;
+    }
+    _notifyIfNotDisposed();
+  }
+
+  /// 툴바/위치 지정/빠른 입력 공통 텍스트 크기(pt)
+  double _textFontSize = 16.0;
+  double get textFontSize => _textFontSize;
+  void setTextFontSize(double pt) {
+    if (_textFontSize == pt) return;
+    _textFontSize = pt;
     _notifyIfNotDisposed();
   }
 
   /// 텍스트 추가 (위치 지정형)
   Future<void> addText(String content, Offset position, {
     Color? color,
-    double fontSize = 16.0,
+    double? fontSize,
   }) async {
     if (_roomId == null || _userId == null || content.isEmpty) return;
 
@@ -481,31 +744,36 @@ class CanvasController extends ChangeNotifier {
       content: content,
       positionX: position.dx,
       positionY: position.dy,
+      fontSize: fontSize ?? _textFontSize,
       createdAt: DateTime.now(),
     );
 
     try {
-      await _textService.saveText(text);
+      final textId = await _textService.saveText(text);
       _lastTextPosition = Offset(position.dx, position.dy + 30); // 다음 위치
       if (_roomId != null && !_disposed) {
         final preview = content.length > 50 ? '${content.substring(0, 50)}…' : content;
         _roomService.updateLastEvent(_roomId!, eventType: 'text', preview: preview);
+        final payload = text.toRtdbPayload()..['id'] = textId;
+        _rtdbRoom.pushEvent(_roomId!, 'text_delta', 'add', payload);
       }
     } catch (e) {
       debugPrint('텍스트 추가 오류: $e');
     }
   }
 
-  /// 빠른 텍스트 추가 (자동 배치)
+  /// 빠른 텍스트 추가 (커서 위치에 배치, 전송 후 커서는 아랫줄로)
   Future<void> addQuickText(String content, {Color? color}) async {
-    // 마지막 위치 아래에 자동 배치
-    final position = _lastTextPosition ?? const Offset(50, 100);
+    final position = _quickTextCursorPosition ?? _lastTextPosition ?? const Offset(50, 100);
     await addText(content, position, color: color);
+    _quickTextCursorPosition = _lastTextPosition;
+    _notifyIfNotDisposed();
   }
 
   /// 텍스트 삭제
   Future<void> deleteText(String textId) async {
     if (_roomId == null) return;
+    _rtdbRoom.pushEvent(_roomId!, 'text_delta', 'remove', {'id': textId});
     await _textService.deleteText(_roomId!, textId, userId: _userId);
   }
 
@@ -549,11 +817,12 @@ class CanvasController extends ChangeNotifier {
     _notifyIfNotDisposed();
   }
 
-  /// 도형 그리기 끝
+  /// 도형 그리기 끝 (완료 후 도형 모드 비활성화)
   Future<void> endShape() async {
     if (_shapeStartPoint == null || _shapeEndPoint == null || _roomId == null || _userId == null) {
       _shapeStartPoint = null;
       _shapeEndPoint = null;
+      setInputMode(InputMode.pen);
       _notifyIfNotDisposed();
       return;
     }
@@ -564,6 +833,7 @@ class CanvasController extends ChangeNotifier {
     if (dx < 5 && dy < 5) {
       _shapeStartPoint = null;
       _shapeEndPoint = null;
+      setInputMode(InputMode.pen);
       _notifyIfNotDisposed();
       return;
     }
@@ -591,12 +861,18 @@ class CanvasController extends ChangeNotifier {
       if (_undoStack.length >= undoRedoLimit) _undoStack.removeAt(0);
       _undoStack.add(_UndoEntry(_UndoEntryType.shape, shapeId, true));
       _redoStack.clear();
+      if (_roomId != null && !_disposed) {
+        final payload = shape.toRtdbPayload()..['id'] = shapeId;
+        _rtdbRoom.pushEvent(_roomId!, 'shape_delta', 'add', payload);
+      }
     } catch (e) {
       debugPrint('도형 저장 오류: $e');
     }
 
     _shapeStartPoint = null;
     _shapeEndPoint = null;
+    // 그리기 완료 후 도형 기능 비활성화 → 펜으로 전환
+    setInputMode(InputMode.pen);
     _notifyIfNotDisposed();
   }
 
@@ -638,6 +914,7 @@ class CanvasController extends ChangeNotifier {
   /// 도형 삭제 (롱프레스 등 — Undo 가능)
   Future<void> deleteShape(String shapeId) async {
     if (_roomId == null) return;
+    _rtdbRoom.pushEvent(_roomId!, 'shape_delta', 'remove', {'id': shapeId});
     await _shapeService.deleteShape(_roomId!, shapeId, userId: _userId);
     if (_selectedShape?.id == shapeId) {
       _selectedShape = null;
@@ -720,7 +997,7 @@ class CanvasController extends ChangeNotifier {
 
   // ===== 미디어 관련 =====
 
-  /// 이미지 업로드
+  /// 이미지 업로드 (이미지 중앙이 화면 중앙에 오도록 배치)
   Future<void> uploadImage(Offset position) async {
     if (_roomId == null || _userId == null) {
       uploadMessageCallback?.call('채팅방에 연결된 후 다시 시도해 주세요.');
@@ -749,6 +1026,8 @@ class CanvasController extends ChangeNotifier {
       return;
     }
 
+    final tempId = 'upload-image-${DateTime.now().millisecondsSinceEpoch}';
+
     try {
       final bytes = await file.readAsBytes();
       final fileName = file.name.isNotEmpty ? file.name : 'image.jpg';
@@ -763,14 +1042,44 @@ class CanvasController extends ChangeNotifier {
         // 크기 조회 실패 시 기본값 유지
       }
 
-      const double maxSide = 600;
+      final viewSize = _getViewportCanvasSize();
+      // 화면 비율에 맞게: 뷰포트 캔버스 크기 안에 맞추기 (100%면 뷰포트, 50%면 그 비율)
       double displayW = width.toDouble();
       double displayH = height.toDouble();
-      if (width > 0 && height > 0 && (width > maxSide || height > maxSide)) {
-        final scale = maxSide / (width > height ? width : height);
+      if (viewSize != null && width > 0 && height > 0) {
+        final scaleW = viewSize.width / width;
+        final scaleH = viewSize.height / height;
+        final scale = scaleW < scaleH ? scaleW : scaleH;
         displayW = width * scale;
         displayH = height * scale;
+      } else if (width > 0 && height > 0) {
+        const double maxSide = 600;
+        if (width > maxSide || height > maxSide) {
+          final scale = maxSide / (width > height ? width : height);
+          displayW = width * scale;
+          displayH = height * scale;
+        }
       }
+      // 사진 크기를 1/3로 (너무 크지 않게)
+      displayW /= 3;
+      displayH /= 3;
+
+      // 이미지 중앙이 보이는 화면 중앙과 일치하도록 위치 계산 (좌상단 = 화면중앙 - 크기/2)
+      final viewportCenter = _getViewportCenterInCanvas();
+      if (viewportCenter != null) {
+        position = viewportCenter - Offset(displayW / 2, displayH / 2);
+      }
+
+      // 플레이스홀더: 최종 이미지와 같은 크기로 생성 (너무 크지 않게)
+      _uploadingPlaceholders.add(UploadingPlaceholder(
+        tempId: tempId,
+        x: position.dx,
+        y: position.dy,
+        width: displayW,
+        height: displayH,
+        type: MediaType.image,
+      ));
+      _notifyIfNotDisposed();
 
       final url = await _mediaService.uploadImageBytes(
         roomId: _roomId!,
@@ -804,6 +1113,8 @@ class CanvasController extends ChangeNotifier {
           preview: fileName,
           url: url,
         );
+        final payload = media.toRtdbPayload()..['id'] = mediaId;
+        _rtdbRoom.pushEvent(_roomId!, 'media_delta', 'add', payload);
       }
       uploadMessageCallback?.call('사진이 추가되었습니다.');
     } catch (e) {
@@ -821,19 +1132,36 @@ class CanvasController extends ChangeNotifier {
       } else {
         uploadMessageCallback?.call('업로드에 실패했습니다. 네트워크를 확인해 주세요.');
       }
+    } finally {
+      _uploadingPlaceholders.removeWhere((p) => p.tempId == tempId);
+      _isUploading = false;
+      _notifyIfNotDisposed();
     }
-
-    _isUploading = false;
-    _notifyIfNotDisposed();
   }
 
-  /// 영상 업로드
+  /// 영상 업로드 (영상 중앙이 화면 중앙에 오도록 배치)
   Future<void> uploadVideo(Offset position) async {
     if (_roomId == null || _userId == null) return;
 
     final file = await _mediaService.pickVideo();
     if (file == null) return;
 
+    final viewSize = _getViewportCanvasSize();
+    final placeW = viewSize?.width ?? 300.0;
+    final placeH = viewSize?.height ?? 200.0;
+    final viewportCenter = _getViewportCenterInCanvas();
+    if (viewportCenter != null) {
+      position = viewportCenter - Offset(placeW / 2, placeH / 2);
+    }
+    final tempId = 'upload-video-${DateTime.now().millisecondsSinceEpoch}';
+    _uploadingPlaceholders.add(UploadingPlaceholder(
+      tempId: tempId,
+      x: position.dx,
+      y: position.dy,
+      width: placeW,
+      height: placeH,
+      type: MediaType.video,
+    ));
     _isUploading = true;
     _notifyIfNotDisposed();
 
@@ -845,6 +1173,21 @@ class CanvasController extends ChangeNotifier {
         type: MediaType.video,
       );
 
+      // 영상 썸네일 생성·업로드 (캔버스에서 영상 확인 가능하도록)
+      String? thumbnailUrl;
+      final thumbBytes = await MediaService.getVideoThumbnailBytes(file.path);
+      if (thumbBytes != null && thumbBytes.isNotEmpty) {
+        try {
+          thumbnailUrl = await _mediaService.uploadImageBytes(
+            roomId: _roomId!,
+            bytes: thumbBytes,
+            fileName: 'thumb_${file.name}.jpg',
+          );
+        } catch (_) {
+          // 썸네일 업로드 실패해도 영상은 저장
+        }
+      }
+
       final media = MediaModel(
         id: '',
         roomId: _roomId!,
@@ -852,10 +1195,11 @@ class CanvasController extends ChangeNotifier {
         type: MediaType.video,
         url: url,
         fileName: file.name,
+        thumbnailUrl: thumbnailUrl,
         x: position.dx,
         y: position.dy,
-        width: 300,
-        height: 200,
+        width: placeW,
+        height: placeH,
         zIndex: _getMaxMediaZIndex() + 1,
         createdAt: DateTime.now(),
       );
@@ -865,28 +1209,48 @@ class CanvasController extends ChangeNotifier {
       _undoStack.add(_UndoEntry(_UndoEntryType.media, mediaId, true));
       _redoStack.clear();
       if (_roomId != null && !_disposed) {
+        // 채팅 목록에서 영상 썸네일로 확인 가능하도록 thumbnailUrl 전달
         _roomService.updateLastEvent(
           _roomId!,
           eventType: 'video',
           preview: file.name,
-          url: url,
+          url: thumbnailUrl ?? url,
         );
+        final payload = media.toRtdbPayload()..['id'] = mediaId;
+        _rtdbRoom.pushEvent(_roomId!, 'media_delta', 'add', payload);
       }
     } catch (e) {
       debugPrint('영상 업로드 오류: $e');
+    } finally {
+      _uploadingPlaceholders.removeWhere((p) => p.tempId == tempId);
+      _isUploading = false;
+      _notifyIfNotDisposed();
     }
-
-    _isUploading = false;
-    _notifyIfNotDisposed();
   }
 
-  /// PDF 업로드
+  /// PDF 업로드 (PDF 중앙이 화면 중앙에 오도록 배치)
   Future<void> uploadPdf(Offset position) async {
     if (_roomId == null || _userId == null) return;
 
     final file = await _mediaService.pickPdf();
     if (file == null || file.path == null) return;
 
+    // 플레이스홀더·최종 PDF 동일 크기 (A4 비율 210:297)
+    const placeW = 210.0;
+    const placeH = 297.0;
+    final viewportCenter = _getViewportCenterInCanvas();
+    if (viewportCenter != null) {
+      position = viewportCenter - Offset(placeW / 2, placeH / 2);
+    }
+    final tempId = 'upload-pdf-${DateTime.now().millisecondsSinceEpoch}';
+    _uploadingPlaceholders.add(UploadingPlaceholder(
+      tempId: tempId,
+      x: position.dx,
+      y: position.dy,
+      width: placeW,
+      height: placeH,
+      type: MediaType.pdf,
+    ));
     _isUploading = true;
     _notifyIfNotDisposed();
 
@@ -908,8 +1272,8 @@ class CanvasController extends ChangeNotifier {
         fileSize: file.size,
         x: position.dx,
         y: position.dy,
-        width: 250,
-        height: 350,
+        width: placeW,
+        height: placeH,
         zIndex: _getMaxMediaZIndex() + 1,
         createdAt: DateTime.now(),
       );
@@ -925,13 +1289,16 @@ class CanvasController extends ChangeNotifier {
           preview: file.name,
           url: url,
         );
+        final payload = media.toRtdbPayload()..['id'] = mediaId;
+        _rtdbRoom.pushEvent(_roomId!, 'media_delta', 'add', payload);
       }
     } catch (e) {
       debugPrint('PDF 업로드 오류: $e');
+    } finally {
+      _uploadingPlaceholders.removeWhere((p) => p.tempId == tempId);
+      _isUploading = false;
+      _notifyIfNotDisposed();
     }
-
-    _isUploading = false;
-    _notifyIfNotDisposed();
   }
 
   int _getMaxMediaZIndex() {
@@ -949,28 +1316,57 @@ class CanvasController extends ChangeNotifier {
     _notifyIfNotDisposed();
   }
 
-  /// 미디어 이동
-  Future<void> moveMedia(String mediaId, Offset delta) async {
-    if (_roomId == null) return;
-    final media = _serverMedia.firstWhere((m) => m.id == mediaId);
-    await _mediaService.updateMedia(
-      _roomId!,
-      mediaId,
-      x: media.x + delta.dx,
-      y: media.y + delta.dy,
-    );
+  /// 미디어 이동 (드래그 중에는 로컬만 반영, Firestore write는 드래그 종료 시 1회만)
+  void moveMedia(String mediaId, Offset delta) {
+    final idx = _serverMedia.indexWhere((m) => m.id == mediaId);
+    if (idx < 0) return;
+    final media = _serverMedia[idx];
+    final newX = media.x + delta.dx;
+    final newY = media.y + delta.dy;
+    _serverMedia = List<MediaModel>.from(_serverMedia);
+    _serverMedia[idx] = media.copyWith(x: newX, y: newY);
+    if (_selectedMedia?.id == mediaId) _selectedMedia = _serverMedia[idx];
+    _notifyIfNotDisposed();
   }
 
-  /// 미디어 크기 조절 (왼쪽/위쪽 핸들 시 x, y 함께 전달)
-  Future<void> resizeMedia(String mediaId, double width, double height, {double? x, double? y}) async {
+  /// 드래그 종료 시 호출: 현재 위치를 Firestore에 1회만 저장 (요금 절감)
+  Future<void> moveMediaEnd(String mediaId) async {
     if (_roomId == null) return;
+    final idx = _serverMedia.indexWhere((m) => m.id == mediaId);
+    if (idx < 0) return;
+    final media = _serverMedia[idx];
+    await _mediaService.updateMedia(_roomId!, mediaId, x: media.x, y: media.y);
+  }
+
+  /// 미디어 크기 조절 (드래그 중에는 로컬만 반영, Firestore write는 리사이즈 종료 시 1회만)
+  void resizeMedia(String mediaId, double width, double height, {double? x, double? y}) {
+    final idx = _serverMedia.indexWhere((m) => m.id == mediaId);
+    if (idx < 0) return;
+    final media = _serverMedia[idx];
+    _serverMedia = List<MediaModel>.from(_serverMedia);
+    _serverMedia[idx] = media.copyWith(
+      width: width,
+      height: height,
+      x: x ?? media.x,
+      y: y ?? media.y,
+    );
+    if (_selectedMedia?.id == mediaId) _selectedMedia = _serverMedia[idx];
+    _notifyIfNotDisposed();
+  }
+
+  /// 리사이즈/이동 종료 시 현재 미디어 위치·크기를 Firestore에 1회 저장
+  Future<void> _persistMediaGeometry(String mediaId) async {
+    if (_roomId == null) return;
+    final idx = _serverMedia.indexWhere((m) => m.id == mediaId);
+    if (idx < 0) return;
+    final media = _serverMedia[idx];
     await _mediaService.updateMedia(
       _roomId!,
       mediaId,
-      x: x,
-      y: y,
-      width: width,
-      height: height,
+      x: media.x,
+      y: media.y,
+      width: media.width,
+      height: media.height,
     );
   }
 
@@ -1007,6 +1403,7 @@ class CanvasController extends ChangeNotifier {
   /// 미디어 삭제 (Undo 가능)
   Future<void> deleteMedia(String mediaId) async {
     if (_roomId == null) return;
+    _rtdbRoom.pushEvent(_roomId!, 'media_delta', 'remove', {'id': mediaId});
     await _mediaService.deleteMedia(_roomId!, mediaId, userId: _userId);
     if (_selectedMedia?.id == mediaId) {
       _selectedMedia = null;
@@ -1059,7 +1456,11 @@ class CanvasController extends ChangeNotifier {
       totalPages: media.totalPages,
       createdAt: DateTime.now(),
     );
-    await _mediaService.saveMedia(copy);
+    final newId = await _mediaService.saveMedia(copy);
+    if (_roomId != null && !_disposed) {
+      final payload = copy.toRtdbPayload()..['id'] = newId;
+      _rtdbRoom.pushEvent(_roomId!, 'media_delta', 'add', payload);
+    }
     _notifyIfNotDisposed();
   }
 
@@ -1071,9 +1472,532 @@ class CanvasController extends ChangeNotifier {
     _notifyIfNotDisposed();
   }
 
-  /// 선택 도구 선택
+  /// 선택 도구 선택 (자유형/사각형 선택 시 펜 모드로 전환 → 툴바에서 모두 선택 가능)
   void selectSelectionTool(SelectionTool tool) {
     _selectionTool = tool;
+    if (tool == SelectionTool.lasso || tool == SelectionTool.rectangle) {
+      _inputMode = InputMode.pen;
+    }
+    _notifyIfNotDisposed();
+  }
+
+  // ===== 손글씨 선택 (자유형/사각형, 다중 선택, 이동/삭제/복사) =====
+
+  final Set<String> _selectedStrokeIds = {};
+  Set<String> get selectedStrokeIds => Set.unmodifiable(_selectedStrokeIds);
+  bool get hasSelectedStrokes => _selectedStrokeIds.isNotEmpty;
+
+  /// 자유형/사각형 선택으로 선택된 미디어(사진·영상·PDF) ID
+  final Set<String> _selectedMediaIds = {};
+  Set<String> get selectedMediaIds => Set.unmodifiable(_selectedMediaIds);
+  bool get hasSelectedMedia => _selectedMediaIds.isNotEmpty;
+
+  /// 자유형/사각형 선택으로 선택된 텍스트 ID
+  final Set<String> _selectedTextIds = {};
+  Set<String> get selectedTextIds => Set.unmodifiable(_selectedTextIds);
+  bool get hasSelectedTexts => _selectedTextIds.isNotEmpty;
+
+  /// 손글씨·미디어·텍스트 중 하나라도 선택됐는지
+  bool get hasSelectedStrokesOrMediaOrText =>
+      hasSelectedStrokes || hasSelectedMedia || hasSelectedTexts;
+
+  /// 선택 그리기 중 경로 (올가미) 또는 null
+  List<Offset>? _selectionPath;
+  List<Offset>? get selectionPath => _selectionPath;
+
+  /// 선택 그리기 중 사각형 (시작점, 현재점) 또는 null
+  (Offset, Offset)? _selectionRect;
+  (Offset, Offset)? get selectionRect => _selectionRect;
+
+  bool _isDrawingSelection = false;
+  bool get isDrawingSelection => _isDrawingSelection;
+
+  /// 선택 영역 이동 모드
+  bool _isMovingSelection = false;
+  Offset? _moveSelectionStart;
+  bool get isMovingSelection => _isMovingSelection;
+
+  void startSelection(Offset point) {
+    if (_selectionTool == SelectionTool.none) return;
+    _isDrawingSelection = true;
+    if (_selectionTool == SelectionTool.lasso) {
+      _selectionPath = [point];
+    } else {
+      _selectionRect = (point, point);
+    }
+    _notifyIfNotDisposed();
+  }
+
+  void updateSelection(Offset point) {
+    if (!_isDrawingSelection) return;
+    if (_selectionTool == SelectionTool.lasso && _selectionPath != null) {
+      _selectionPath!.add(point);
+    } else if (_selectionTool == SelectionTool.rectangle && _selectionRect != null) {
+      _selectionRect = (_selectionRect!.$1, point);
+    }
+    _notifyIfNotDisposed();
+  }
+
+  void endSelection() {
+    if (!_isDrawingSelection) return;
+    _isDrawingSelection = false;
+
+    final strokeIds = _strokeIdsInSelection();
+    final mediaIds = _mediaIdsInSelection();
+    final textIds = _textIdsInSelection();
+    _selectionPath = null;
+    _selectionRect = null;
+
+    _selectedStrokeIds.clear();
+    _selectedMediaIds.clear();
+    _selectedTextIds.clear();
+    if (strokeIds.isNotEmpty) _selectedStrokeIds.addAll(strokeIds);
+    if (mediaIds.isNotEmpty) _selectedMediaIds.addAll(mediaIds);
+    if (textIds.isNotEmpty) _selectedTextIds.addAll(textIds);
+    _notifyIfNotDisposed();
+  }
+
+  /// 선택 영역 내 스트로크 ID 목록
+  Set<String> _strokeIdsInSelection() {
+    final result = <String>{};
+    final allStrokes = _getAllStrokesForSelection();
+
+    if (_selectionTool == SelectionTool.lasso && _selectionPath != null && _selectionPath!.length >= 3) {
+      final path = _selectionPath!;
+      for (final stroke in allStrokes) {
+        if (_strokeIntersectsLasso(stroke, path)) result.add(_getStrokeId(stroke));
+      }
+    } else if (_selectionTool == SelectionTool.rectangle && _selectionRect != null) {
+      final (a, b) = _selectionRect!;
+      final rect = Rect.fromPoints(a, b);
+      for (final stroke in allStrokes) {
+        if (_strokeIntersectsRect(stroke, rect)) result.add(_getStrokeId(stroke));
+      }
+    }
+    return result;
+  }
+
+  List<dynamic> _getAllStrokesForSelection() {
+    final list = <dynamic>[];
+    for (final s in _serverStrokes) {
+      if (!s.isDeleted) list.add(s);
+    }
+    for (final s in _localStrokes) {
+      list.add(s);
+    }
+    return list;
+  }
+
+  String _getStrokeId(dynamic s) {
+    if (s is StrokeModel) return s.id;
+    if (s is LocalStrokeData) return s.firestoreId ?? s.id;
+    return '';
+  }
+
+  Rect _strokeBoundingBox(dynamic s) {
+    List<Offset> points;
+    if (s is StrokeModel) {
+      points = s.points.map((p) => Offset(p.x, p.y)).toList();
+    } else if (s is LocalStrokeData) {
+      points = s.points.map((p) => p.offset).toList();
+    } else {
+      return Rect.zero;
+    }
+    if (points.isEmpty) return Rect.zero;
+    double minX = points.first.dx, maxX = minX, minY = points.first.dy, maxY = minY;
+    for (final p in points) {
+      if (p.dx < minX) minX = p.dx;
+      if (p.dx > maxX) maxX = p.dx;
+      if (p.dy < minY) minY = p.dy;
+      if (p.dy > maxY) maxY = p.dy;
+    }
+    return Rect.fromLTRB(minX, minY, maxX, maxY);
+  }
+
+  bool _strokeIntersectsRect(dynamic stroke, Rect rect) {
+    return rect.overlaps(_strokeBoundingBox(stroke));
+  }
+
+  static bool _pointInPolygon(Offset p, List<Offset> polygon) {
+    if (polygon.length < 3) return false;
+    bool inside = false;
+    int j = polygon.length - 1;
+    for (int i = 0; i < polygon.length; i++) {
+      final a = polygon[i];
+      final b = polygon[j];
+      if ((a.dy > p.dy) != (b.dy > p.dy) &&
+          (p.dx < (b.dx - a.dx) * (p.dy - a.dy) / (b.dy - a.dy) + a.dx)) {
+        inside = !inside;
+      }
+      j = i;
+    }
+    return inside;
+  }
+
+  bool _strokeIntersectsLasso(dynamic stroke, List<Offset> path) {
+    final bbox = _strokeBoundingBox(stroke);
+    final center = bbox.center;
+    return _pointInPolygon(center, path);
+  }
+
+  /// 선택 영역 내 미디어(사진·영상·PDF) ID 목록
+  Set<String> _mediaIdsInSelection() {
+    final result = <String>{};
+    if (_selectionTool == SelectionTool.lasso && _selectionPath != null && _selectionPath!.length >= 3) {
+      final path = _selectionPath!;
+      final pathRect = _rectFromPoints(path);
+      for (final media in _serverMedia) {
+        final rect = Rect.fromLTWH(media.x, media.y, media.width, media.height);
+        if (!pathRect.overlaps(rect)) continue;
+        if (_pointInPolygon(rect.center, path)) result.add(media.id);
+      }
+    } else if (_selectionTool == SelectionTool.rectangle && _selectionRect != null) {
+      final (a, b) = _selectionRect!;
+      final selRect = Rect.fromPoints(a, b);
+      for (final media in _serverMedia) {
+        final rect = Rect.fromLTWH(media.x, media.y, media.width, media.height);
+        if (selRect.overlaps(rect)) result.add(media.id);
+      }
+    }
+    return result;
+  }
+
+  /// 선택 영역 내 텍스트 ID 목록
+  Set<String> _textIdsInSelection() {
+    final result = <String>{};
+    if (_selectionTool == SelectionTool.lasso && _selectionPath != null && _selectionPath!.length >= 3) {
+      final path = _selectionPath!;
+      final pathRect = _rectFromPoints(path);
+      for (final text in _serverTexts) {
+        final x = text.positionX ?? 0.0;
+        final y = text.positionY ?? 0.0;
+        final w = (text.width != null && text.width! > 0)
+            ? text.width!
+            : ((text.content?.length ?? 0) * 10.0).clamp(40.0, 400.0);
+        final h = text.height ?? 24.0;
+        final rect = Rect.fromLTWH(x, y, w, h);
+        if (!pathRect.overlaps(rect)) continue;
+        if (_pointInPolygon(rect.center, path)) result.add(text.id);
+      }
+    } else if (_selectionTool == SelectionTool.rectangle && _selectionRect != null) {
+      final (a, b) = _selectionRect!;
+      final selRect = Rect.fromPoints(a, b);
+      for (final text in _serverTexts) {
+        final x = text.positionX ?? 0.0;
+        final y = text.positionY ?? 0.0;
+        final w = (text.width != null && text.width! > 0)
+            ? text.width!
+            : ((text.content?.length ?? 0) * 10.0).clamp(40.0, 400.0);
+        final h = text.height ?? 24.0;
+        final rect = Rect.fromLTWH(x, y, w, h);
+        if (selRect.overlaps(rect)) result.add(text.id);
+      }
+    }
+    return result;
+  }
+
+  Rect _rectFromPoints(List<Offset> points) {
+    if (points.isEmpty) return Rect.zero;
+    double minX = points.first.dx, maxX = minX, minY = points.first.dy, maxY = minY;
+    for (final p in points) {
+      if (p.dx < minX) minX = p.dx;
+      if (p.dx > maxX) maxX = p.dx;
+      if (p.dy < minY) minY = p.dy;
+      if (p.dy > maxY) maxY = p.dy;
+    }
+    return Rect.fromLTRB(minX, minY, maxX, maxY);
+  }
+
+  void clearStrokeSelection() {
+    _selectedStrokeIds.clear();
+    _selectedMediaIds.clear();
+    _selectedTextIds.clear();
+    _selectedMedia = null;
+    _notifyIfNotDisposed();
+  }
+
+  void toggleStrokeInSelection(String id) {
+    if (_selectedStrokeIds.contains(id)) {
+      _selectedStrokeIds.remove(id);
+    } else {
+      _selectedStrokeIds.add(id);
+    }
+    _notifyIfNotDisposed();
+  }
+
+  /// 선택된 스트로크 삭제
+  Future<void> deleteSelectedStrokes() async {
+    if (_roomId == null || _selectedStrokeIds.isEmpty) return;
+    final ids = List<String>.from(_selectedStrokeIds);
+    await _strokeService.deleteStrokes(_roomId!, ids, userId: _userId);
+    for (final id in ids) {
+      _rtdbRoom.pushEvent(_roomId!, 'stroke_delta', 'remove', {'id': id});
+    }
+    _selectedStrokeIds.clear();
+    for (final id in ids) {
+      if (_undoStack.length >= undoRedoLimit) _undoStack.removeAt(0);
+      _undoStack.add(_UndoEntry(_UndoEntryType.stroke, id, false));
+    }
+    _redoStack.clear();
+    _notifyIfNotDisposed();
+  }
+
+  /// 선택된 항목 전체 삭제 (손글씨·미디어·텍스트)
+  Future<void> deleteSelection() async {
+    if (_roomId == null) return;
+    final strokeIds = List<String>.from(_selectedStrokeIds);
+    final mediaIds = List<String>.from(_selectedMediaIds);
+    final textIds = List<String>.from(_selectedTextIds);
+    if (strokeIds.isNotEmpty) await deleteSelectedStrokes();
+    for (final id in mediaIds) {
+      await deleteMedia(id);
+    }
+    _selectedMediaIds.clear();
+    if (_selectedMedia != null && mediaIds.contains(_selectedMedia!.id)) {
+      _selectedMedia = null;
+    }
+    for (final id in textIds) {
+      _rtdbRoom.pushEvent(_roomId!, 'text_delta', 'remove', {'id': id});
+      await _textService.deleteText(_roomId!, id, userId: _userId);
+    }
+    _selectedTextIds.clear();
+    _notifyIfNotDisposed();
+  }
+
+  /// 선택된 항목 전체 복사 (손글씨 오프셋 저장, 미디어·텍스트 복제)
+  Future<void> copySelection({Offset offset = const Offset(24, 24)}) async {
+    if (_roomId == null || _userId == null) return;
+    if (_selectedStrokeIds.isNotEmpty) await copySelectedStrokes(offset: offset);
+    for (final id in _selectedMediaIds) {
+      await duplicateMedia(id);
+    }
+    for (final id in _selectedTextIds) {
+      final idx = _serverTexts.indexWhere((t) => t.id == id);
+      if (idx >= 0) {
+        final text = _serverTexts[idx];
+        if (text.content != null && text.content!.isNotEmpty) {
+          final px = text.positionX ?? 0.0;
+          final py = text.positionY ?? 0.0;
+          await addText(text.content!, Offset(px + offset.dx, py + offset.dy));
+        }
+      }
+    }
+    _notifyIfNotDisposed();
+  }
+
+  /// 선택된 스트로크 복사 (오프셋 적용 후 새로 저장)
+  Future<void> copySelectedStrokes({Offset offset = const Offset(24, 24)}) async {
+    if (_roomId == null || _userId == null || _selectedStrokeIds.isEmpty) return;
+    final allStrokes = _getAllStrokesForSelection();
+    for (final s in allStrokes) {
+      final id = _getStrokeId(s);
+      if (!_selectedStrokeIds.contains(id)) continue;
+
+      List<StrokePoint> points;
+      PenStyle style;
+      if (s is StrokeModel) {
+        points = s.points.map((p) => StrokePoint(
+          x: p.x + offset.dx,
+          y: p.y + offset.dy,
+          pressure: p.pressure,
+          timestamp: p.timestamp,
+        )).toList();
+        style = s.style;
+      } else if (s is LocalStrokeData) {
+        points = s.points.map((p) => StrokePoint(
+          x: p.x + offset.dx,
+          y: p.y + offset.dy,
+          pressure: p.pressure,
+          timestamp: p.timestamp,
+        )).toList();
+        final hex = s.color.toARGB32().toRadixString(16).padLeft(8, '0').substring(2);
+        style = PenStyle(color: '#$hex', width: s.strokeWidth, penType: s.penType.name);
+      } else {
+        continue;
+      }
+
+      final model = StrokeModel(
+        id: '',
+        roomId: _roomId!,
+        senderId: _userId!,
+        points: points,
+        style: style,
+        createdAt: DateTime.now(),
+      );
+      await _strokeService.saveStroke(model);
+    }
+    _notifyIfNotDisposed();
+  }
+
+  /// 선택된 스트로크·미디어·텍스트 이동
+  void startMovingSelection(Offset point) {
+    if (!hasSelectedStrokesOrMediaOrText) return;
+    _isMovingSelection = true;
+    _moveSelectionStart = point;
+    _notifyIfNotDisposed();
+  }
+
+  void updateMovingSelection(Offset point) {
+    if (!_isMovingSelection || _moveSelectionStart == null) return;
+    final delta = point - _moveSelectionStart!;
+    _moveSelectionStart = point;
+    _applyMoveDeltaToSelectedStrokes(delta);
+    _applyMoveDeltaToSelectedMedia(delta);
+    _applyMoveDeltaToSelectedTexts(delta);
+    _notifyIfNotDisposed();
+  }
+
+  Future<void> endMovingSelection() async {
+    if (!_isMovingSelection || _roomId == null) return;
+    _isMovingSelection = false;
+    _moveSelectionStart = null;
+    await _persistMovedStrokes();
+    for (final id in _selectedMediaIds) {
+      await moveMediaEnd(id);
+    }
+    await _persistMovedTexts();
+    _notifyIfNotDisposed();
+  }
+
+  void _applyMoveDeltaToSelectedMedia(Offset delta) {
+    for (final id in _selectedMediaIds) {
+      moveMedia(id, delta);
+    }
+  }
+
+  void _applyMoveDeltaToSelectedTexts(Offset delta) {
+    _serverTexts = _serverTexts.map((text) {
+      if (!_selectedTextIds.contains(text.id)) return text;
+      final nx = (text.positionX ?? 0) + delta.dx;
+      final ny = (text.positionY ?? 0) + delta.dy;
+      return MessageModel(
+        id: text.id,
+        roomId: text.roomId,
+        senderId: text.senderId,
+        type: text.type,
+        content: text.content,
+        fileUrl: text.fileUrl,
+        fileName: text.fileName,
+        fileSize: text.fileSize,
+        thumbnailUrl: text.thumbnailUrl,
+        positionX: nx,
+        positionY: ny,
+        width: text.width,
+        height: text.height,
+        fontSize: text.fontSize,
+        opacity: text.opacity,
+        createdAt: text.createdAt,
+        isDeleted: text.isDeleted,
+      );
+    }).toList();
+  }
+
+  Future<void> _persistMovedTexts() async {
+    if (_roomId == null) return;
+    for (final id in _selectedTextIds) {
+      final idx = _serverTexts.indexWhere((t) => t.id == id);
+      if (idx >= 0) {
+        final text = _serverTexts[idx];
+        await _textService.updateText(
+          _roomId!,
+          id,
+          positionX: text.positionX,
+          positionY: text.positionY,
+        );
+      }
+    }
+  }
+
+  void _applyMoveDeltaToSelectedStrokes(Offset delta) {
+    for (final s in _serverStrokes) {
+      if (!_selectedStrokeIds.contains(s.id)) continue;
+      final idx = _serverStrokes.indexWhere((x) => x.id == s.id);
+      if (idx < 0) continue;
+      final updated = StrokeModel(
+        id: s.id,
+        roomId: s.roomId,
+        senderId: s.senderId,
+        points: s.points.map((p) => StrokePoint(
+          x: p.x + delta.dx,
+          y: p.y + delta.dy,
+          pressure: p.pressure,
+          timestamp: p.timestamp,
+        )).toList(),
+        style: s.style,
+        createdAt: s.createdAt,
+        isConfirmed: s.isConfirmed,
+        isDeleted: s.isDeleted,
+      );
+      _serverStrokes = List<StrokeModel>.from(_serverStrokes);
+      _serverStrokes[idx] = updated;
+    }
+    for (final s in _localStrokes) {
+      if (!_selectedStrokeIds.contains(s.firestoreId ?? s.id)) continue;
+      for (int i = 0; i < s.points.length; i++) {
+        s.points[i] = LocalStrokePoint(
+          x: s.points[i].x + delta.dx,
+          y: s.points[i].y + delta.dy,
+          pressure: s.points[i].pressure,
+          timestamp: s.points[i].timestamp,
+        );
+      }
+    }
+  }
+
+  Future<void> _persistMovedStrokes() async {
+    if (_roomId == null) return;
+    for (final s in _serverStrokes) {
+      if (!_selectedStrokeIds.contains(s.id)) continue;
+      await _strokeService.updateStrokePoints(_roomId!, s.id, s.points);
+    }
+  }
+
+  /// 포인트가 선택된 스트로크 위에 있는지
+  bool isPointOnSelectedStroke(Offset canvasPoint) {
+    const margin = 16.0;
+    for (final s in _serverStrokes) {
+      if (!_selectedStrokeIds.contains(s.id)) continue;
+      final bbox = _strokeBoundingBox(s);
+      if (bbox.inflate(margin).contains(canvasPoint)) return true;
+    }
+    for (final s in _localStrokes) {
+      final id = s.firestoreId ?? s.id;
+      if (!_selectedStrokeIds.contains(id)) continue;
+      final bbox = _strokeBoundingBox(s);
+      if (bbox.inflate(margin).contains(canvasPoint)) return true;
+    }
+    return false;
+  }
+
+  /// 포인트가 선택된 영역(손글씨·미디어·텍스트) 위에 있는지 (이동 제스처용)
+  bool isPointOnSelectedSelection(Offset canvasPoint) {
+    if (isPointOnSelectedStroke(canvasPoint)) return true;
+    for (final id in _selectedMediaIds) {
+      final idx = _serverMedia.indexWhere((m) => m.id == id);
+      if (idx < 0) continue;
+      final media = _serverMedia[idx];
+      final rect = Rect.fromLTWH(media.x, media.y, media.width, media.height);
+      if (rect.contains(canvasPoint)) return true;
+    }
+    for (final id in _selectedTextIds) {
+      final idx = _serverTexts.indexWhere((t) => t.id == id);
+      if (idx < 0) continue;
+      final text = _serverTexts[idx];
+      final x = text.positionX ?? 0.0;
+      final y = text.positionY ?? 0.0;
+      final w = (text.width != null && text.width! > 0)
+          ? text.width!
+          : ((text.content?.length ?? 0) * 10.0).clamp(40.0, 400.0);
+      final h = text.height ?? 24.0;
+      if (Rect.fromLTWH(x, y, w, h).contains(canvasPoint)) return true;
+    }
+    return false;
+  }
+
+  void cancelSelectionDrawing() {
+    _isDrawingSelection = false;
+    _selectionPath = null;
+    _selectionRect = null;
     _notifyIfNotDisposed();
   }
 
@@ -1137,7 +2061,7 @@ class CanvasController extends ChangeNotifier {
   }
 
   /// 그리기 시작 (forceEraser: 펜 옆 버튼 눌렀을 때 지우개로 전환)
-  void startStroke(Offset point, {bool forceEraser = false}) {
+  void startStroke(Offset point, {bool forceEraser = false, double pressure = 1.0, int? timestamp}) {
     if (_userId == null || _roomId == null) return;
 
     if (_currentPen == PenType.eraser || forceEraser) {
@@ -1145,12 +2069,13 @@ class CanvasController extends ChangeNotifier {
       return;
     }
 
-    final id = '${_userId}_${DateTime.now().millisecondsSinceEpoch}';
+    final ts = timestamp ?? DateTime.now().millisecondsSinceEpoch;
+    final id = '${_userId}_${ts}';
     _currentStroke = LocalStrokeData(
       id: id,
       senderId: _userId!,
       senderName: _userName,
-      points: [point],
+      points: [LocalStrokePoint(x: point.dx, y: point.dy, pressure: pressure, timestamp: ts)],
       color: currentColor,
       strokeWidth: currentWidth,
       penType: _currentPen,
@@ -1160,14 +2085,15 @@ class CanvasController extends ChangeNotifier {
   }
 
   /// 그리기 중 (forceEraser: 펜 옆 버튼 눌렀을 때 지우개로 전환)
-  void updateStroke(Offset point, {bool forceEraser = false}) {
+  void updateStroke(Offset point, {bool forceEraser = false, double pressure = 1.0, int? timestamp}) {
     if (_currentPen == PenType.eraser || forceEraser) {
       _eraseAtPoint(point);
       return;
     }
 
     if (_currentStroke != null) {
-      _currentStroke!.points.add(point);
+      final ts = timestamp ?? DateTime.now().millisecondsSinceEpoch;
+      _currentStroke!.points.add(LocalStrokePoint(x: point.dx, y: point.dy, pressure: pressure, timestamp: ts));
       _notifyIfNotDisposed();
     }
   }
@@ -1189,20 +2115,20 @@ class CanvasController extends ChangeNotifier {
     _localStrokes.add(stroke);
     _notifyIfNotDisposed();
 
+    // 압축 없이 원본 포인트 그대로 저장, 필압력 포함
     final points = stroke.points.map((p) {
       return StrokePoint(
-        x: p.dx,
-        y: p.dy,
-        timestamp: DateTime.now().millisecondsSinceEpoch,
+        x: p.x,
+        y: p.y,
+        pressure: p.pressure,
+        timestamp: p.timestamp,
       );
     }).toList();
-    // epsilon 작을수록 원본에 가깝게 유지 (원·곡선이 각지지 않도록)
-    final simplifiedPoints = StrokeService.simplifyPoints(points, 0.4);
     final strokeModel = StrokeModel(
       id: stroke.id,
       roomId: _roomId!,
       senderId: stroke.senderId,
-      points: simplifiedPoints,
+      points: points,
       style: PenStyle(
         color: '#${stroke.color.toARGB32().toRadixString(16).padLeft(8, '0').substring(2)}',
         width: stroke.strokeWidth,
@@ -1217,6 +2143,8 @@ class CanvasController extends ChangeNotifier {
       stroke.firestoreId = firestoreId;
       if (_roomId != null && !_disposed) {
         _roomService.updateLastEvent(_roomId!, eventType: 'stroke', preview: '손글씨');
+        final payload = strokeModel.toRtdbPayload()..['id'] = firestoreId;
+        _rtdbRoom.pushEvent(_roomId!, 'stroke_delta', 'add', payload);
       }
 
       _confirmTimer?.cancel();
@@ -1249,6 +2177,8 @@ class CanvasController extends ChangeNotifier {
         item.stroke.firestoreId = firestoreId;
         if (_roomId != null && !_disposed) {
           _roomService.updateLastEvent(_roomId!, eventType: 'stroke', preview: '손글씨');
+          final payload = item.model.toRtdbPayload()..['id'] = firestoreId;
+          _rtdbRoom.pushEvent(_roomId!, 'stroke_delta', 'add', payload);
         }
         _confirmTimer?.cancel();
         _confirmTimer = Timer(_confirmDelay, () {
@@ -1272,6 +2202,9 @@ class CanvasController extends ChangeNotifier {
 
     stroke.isConfirmed = true;
     await _strokeService.confirmStroke(_roomId!, stroke.firestoreId!);
+    if (_roomId != null) {
+      _rtdbRoom.pushEvent(_roomId!, 'stroke_delta', 'update', {'id': stroke.firestoreId!, 'isConfirmed': true});
+    }
     _notifyIfNotDisposed();
   }
 
@@ -1325,12 +2258,12 @@ class CanvasController extends ChangeNotifier {
       if (pts.isEmpty) continue;
       bool hit = false;
       for (var i = 0; i < pts.length; i++) {
-        if ((pts[i] - point).distance <= radius) {
+        if ((pts[i].offset - point).distance <= radius) {
           hit = true;
           break;
         }
         if (i < pts.length - 1) {
-          if (_distancePointToSegment(point, pts[i], pts[i + 1]) <= radius) {
+          if (_distancePointToSegment(point, pts[i].offset, pts[i + 1].offset) <= radius) {
             hit = true;
             break;
           }
@@ -1395,19 +2328,24 @@ class CanvasController extends ChangeNotifier {
   }
 
   Future<void> _performDelete(_UndoEntry entry) async {
-    switch (entry.type) {
-      case _UndoEntryType.stroke:
-        await _strokeService.deleteStroke(_roomId!, entry.id, userId: _userId);
-        break;
-      case _UndoEntryType.shape:
-        await _shapeService.deleteShape(_roomId!, entry.id, userId: _userId);
-        if (_selectedShape?.id == entry.id) {
-          _selectedShape = null;
-        }
-        break;
-      case _UndoEntryType.media:
-        await _mediaService.deleteMedia(_roomId!, entry.id, userId: _userId);
-        break;
+    if (_roomId != null) {
+      switch (entry.type) {
+        case _UndoEntryType.stroke:
+          _rtdbRoom.pushEvent(_roomId!, 'stroke_delta', 'remove', {'id': entry.id});
+          await _strokeService.deleteStroke(_roomId!, entry.id, userId: _userId);
+          break;
+        case _UndoEntryType.shape:
+          _rtdbRoom.pushEvent(_roomId!, 'shape_delta', 'remove', {'id': entry.id});
+          await _shapeService.deleteShape(_roomId!, entry.id, userId: _userId);
+          if (_selectedShape?.id == entry.id) {
+            _selectedShape = null;
+          }
+          break;
+        case _UndoEntryType.media:
+          _rtdbRoom.pushEvent(_roomId!, 'media_delta', 'remove', {'id': entry.id});
+          await _mediaService.deleteMedia(_roomId!, entry.id, userId: _userId);
+          break;
+      }
     }
   }
 
@@ -1487,10 +2425,17 @@ class CanvasController extends ChangeNotifier {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    if (_roomId != null) {
+      _roomCanvasViewState[_roomId!] = _SavedCanvasView(_canvasOffset, _canvasScale);
+    }
+    if (_roomId != null && _userId != null) {
+      _rtdbRoom.setRoomMember(_roomId!, _userId!, false);
+    }
     _strokesSubscription?.cancel();
     _textsSubscription?.cancel();
     _shapesSubscription?.cancel();
     _mediaSubscription?.cancel();
+    _rtdbSubscription?.cancel();
     _confirmTimer?.cancel();
     super.dispose();
   }

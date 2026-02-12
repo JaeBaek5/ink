@@ -30,7 +30,16 @@ class StrokeService {
     }
   }
 
-  /// 스트로크 실시간 스트림
+  /// 스트로크 1회 로드 (캔버스 진입 시 Firestore Read 1회, 실시간은 RTDB로)
+  Future<List<StrokeModel>> getStrokes(String roomId) async {
+    final snapshot = await _strokesCollection(roomId)
+        .where('isDeleted', isEqualTo: false)
+        .orderBy('createdAt', descending: false)
+        .get();
+    return snapshot.docs.map((doc) => StrokeModel.fromFirestore(doc)).toList();
+  }
+
+  /// 스트로크 실시간 스트림 (레거시; 실시간은 RTDB 사용 권장)
   Stream<List<StrokeModel>> getStrokesStream(String roomId) {
     return _strokesCollection(roomId)
         .where('isDeleted', isEqualTo: false)
@@ -61,6 +70,18 @@ class StrokeService {
       });
     } catch (e) {
       debugPrint('스트로크 확정 실패: $e');
+    }
+  }
+
+  /// 스트로크 포인트 업데이트 (이동 시)
+  Future<void> updateStrokePoints(String roomId, String strokeId, List<StrokePoint> points) async {
+    try {
+      await _strokesCollection(roomId).doc(strokeId).update({
+        'points': points.map((p) => p.toMap()).toList(),
+      });
+    } catch (e) {
+      debugPrint('스트로크 포인트 업데이트 실패: $e');
+      rethrow;
     }
   }
 

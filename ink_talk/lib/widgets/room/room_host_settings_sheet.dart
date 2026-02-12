@@ -8,7 +8,12 @@ import '../../services/settings_service.dart';
 
 /// 방장 설정 시트 (내보내기 허용/차단, 워터마크 강제, 로그 공개)
 /// owner/admin만 표시·저장 가능
-void showRoomHostSettingsSheet(BuildContext context, RoomModel room) {
+/// [onCanvasReset]: 캔버스 초기화 성공 시 로컬 상태 정리를 위해 호출 (캔버스 화면에서 전달)
+void showRoomHostSettingsSheet(
+  BuildContext context,
+  RoomModel room, {
+  void Function()? onCanvasReset,
+}) {
   final authProvider = context.read<AuthProvider>();
   final myUserId = authProvider.user?.uid ?? '';
   final myRole = room.members[myUserId]?.role;
@@ -34,6 +39,7 @@ void showRoomHostSettingsSheet(BuildContext context, RoomModel room) {
 
   showModalBottomSheet(
     context: context,
+    isScrollControlled: true,
     backgroundColor: AppColors.paper,
     shape: const RoundedRectangleBorder(
       borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
@@ -42,12 +48,13 @@ void showRoomHostSettingsSheet(BuildContext context, RoomModel room) {
       return StatefulBuilder(
         builder: (context, setModalState) {
           return SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
+            child: SingleChildScrollView(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                   Row(
                     children: [
                       Icon(Icons.settings_outlined, size: 20, color: AppColors.gold),
@@ -118,6 +125,48 @@ void showRoomHostSettingsSheet(BuildContext context, RoomModel room) {
                     onChanged: (v) => setModalState(() => canvasExpandMode = v!),
                   ),
                   const SizedBox(height: 16),
+                  ListTile(
+                    leading: Icon(Icons.cleaning_services_outlined, color: AppColors.gold),
+                    title: const Text('캔버스 초기화'),
+                    subtitle: const Text('캔버스의 모든 손글씨·도형·텍스트·미디어를 삭제합니다. 되돌릴 수 없습니다.'),
+                    onTap: () async {
+                      final confirmed = await showDialog<bool>(
+                        context: context,
+                        builder: (ctx) => AlertDialog(
+                          title: const Text('캔버스 초기화'),
+                          content: const Text(
+                            '이 방의 캔버스에 있는 모든 손글씨·도형·텍스트·미디어가 삭제됩니다.\n\n이 작업은 되돌릴 수 없습니다. 계속하시겠습니까?',
+                          ),
+                          actions: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(ctx, false),
+                              child: const Text('취소'),
+                            ),
+                            TextButton(
+                              onPressed: () => Navigator.pop(ctx, true),
+                              style: TextButton.styleFrom(
+                                foregroundColor: Colors.red,
+                              ),
+                              child: const Text('초기화'),
+                            ),
+                          ],
+                        ),
+                      );
+                      if (!context.mounted || confirmed != true) return;
+                      final roomProvider = context.read<RoomProvider>();
+                      final success = await roomProvider.resetCanvas(room.id, myUserId);
+                      if (!context.mounted) return;
+                      if (success) onCanvasReset?.call();
+                      Navigator.pop(context);
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(success ? '캔버스가 초기화되었습니다.' : '캔버스 초기화에 실패했습니다.'),
+                          backgroundColor: success ? null : Colors.red,
+                        ),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 16),
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton(
@@ -145,6 +194,7 @@ void showRoomHostSettingsSheet(BuildContext context, RoomModel room) {
                 ],
               ),
             ),
+          ),
           );
         },
       );

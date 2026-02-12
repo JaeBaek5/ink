@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/gestures.dart';
+import 'package:perfect_freehand/perfect_freehand.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
 import 'package:provider/provider.dart';
@@ -15,6 +16,7 @@ import '../../services/tag_service.dart';
 import '../../models/shape_model.dart';
 import '../../models/stroke_model.dart';
 import '../../screens/canvas/canvas_controller.dart';
+import 'image_crop_screen.dart';
 import 'media_widget.dart';
 import 'timeline_navigator.dart';
 
@@ -102,11 +104,15 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     super.dispose();
   }
 
-  /// 펜/지우개 모드이고 해당 미디어가 크기 조정 중이 아니면 true (포인터 무시 → 캔버스로 통과)
-  bool _mediaIgnorePointer(String mediaId) {
+  /// 펜/지우개 모드이고 해당 미디어가 크기 조정 중이 아니면 true (포인터 무시 → 캔버스로 통과).
+  /// 크기 조정(resize) 모드일 때는 true로 해서 상위 GestureDetector가 pan을 받아 PDF/영상/사진 이동이 되도록 함.
+  /// 영상은 선택 안 했을 때만 터치 받음 (재생 버튼).
+  bool _mediaIgnorePointer(MediaModel media) {
+    if (widget.controller.isMediaInResizeMode(media.id)) return true;
+    if (media.type == MediaType.video) return false;
     final pen = widget.controller.currentPen;
     final isDrawingTool = pen == PenType.pen1 || pen == PenType.pen2 || pen == PenType.fountain || pen == PenType.brush || pen == PenType.highlighter || pen == PenType.eraser;
-    return isDrawingTool && !widget.controller.isMediaInResizeMode(mediaId);
+    return isDrawingTool;
   }
 
   @override
@@ -117,6 +123,7 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
         setState(() => _eraserHoverPosition = null);
       },
       child: Listener(
+        behavior: HitTestBehavior.opaque,
         onPointerDown: _onPointerDown,
         onPointerMove: _onPointerMove,
         onPointerUp: _onPointerUp,
@@ -145,7 +152,7 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
                     child: Stack(
                       clipBehavior: Clip.none,
                       children: [
-            // 캔버스 (배경·격자·도형)
+            // 캔버스 (배경·격자·도형) — 미디어는 아래 별도 레이어로 올려 터치가 재생 버튼 등에 전달되게 함
             ClipRect(
               child: CustomPaint(
                         painter: _CanvasPainter(
@@ -169,39 +176,13 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
                           gridSize: CanvasController.gridSize,
                           highlightTagRect: widget.highlightTagArea,
                           strokesOnly: false,
+                          selectionPath: widget.controller.selectionPath,
+                          selectionRect: widget.controller.selectionRect,
+                          selectedStrokeIds: widget.controller.selectedStrokeIds,
                         ),
                         size: Size.infinite,
                       ),
             ),
-
-            // 미디어 오브젝트 렌더링 (url 없는 항목 제외 → 이미지 추가 직후 스트림 지연 시 빈 화면 방지)
-            ...widget.controller.serverMedia
-                .where((media) => media.url.isNotEmpty)
-                .map((media) => MediaWidget(
-              key: ValueKey(media.id),
-              media: media,
-              isSelected: widget.controller.selectedMedia?.id == media.id,
-              isResizeMode: widget.controller.isMediaInResizeMode(media.id),
-              canvasOffset: widget.controller.canvasOffset,
-              canvasScale: widget.controller.canvasScale,
-              onTap: () {
-                if (widget.controller.selectedMedia?.id == media.id &&
-                    widget.controller.isMediaInResizeMode(media.id)) {
-                  _showMediaOptions(context, media);
-                }
-                // 탭으로는 선택 안 함 — 길게 눌러야 선택됨
-              },
-              onLongPress: () {
-                widget.controller.selectMedia(media);
-                widget.controller.enterMediaResizeMode(media.id);
-              },
-              onMove: (delta) => widget.controller.moveMedia(media.id, delta),
-              onResize: (width, height, {x, y}) => widget.controller.resizeMedia(media.id, width, height, x: x, y: y),
-              onResizeEnd: () => widget.controller.clearMediaResizeMode(),
-              onRotate: (angleDegrees) => widget.controller.rotateMedia(media.id, angleDegrees),
-              onSkew: (skewX, skewY) => widget.controller.skewMedia(media.id, skewX, skewY),
-              ignorePointer: _mediaIgnorePointer(media.id),
-            )),
 
             // 손글씨 스트로크 레이어 (미디어 위에 그려서 사진 위에 글씨 쓰기)
             ClipRect(
@@ -227,6 +208,13 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
                   gridSize: CanvasController.gridSize,
                   highlightTagRect: widget.highlightTagArea,
                   strokesOnly: true,
+                  selectionPath: widget.controller.selectionPath,
+                  selectionRect: widget.controller.selectionRect,
+                  selectedStrokeIds: widget.controller.selectedStrokeIds,
+                  selectedMediaIds: widget.controller.selectedMediaIds,
+                  selectedTextIds: widget.controller.selectedTextIds,
+                  serverMedia: widget.controller.serverMedia,
+                  serverTexts: widget.controller.serverTexts,
                 ),
                 size: Size.infinite,
               ),
@@ -234,6 +222,51 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
 
             // 텍스트 오브젝트 렌더링
             ...widget.controller.serverTexts.map((text) => _buildTextWidget(text)),
+
+            // 위치 지정 텍스트 모드: 손가락으로 누른 위치에 깜빡이는 커서
+            if (widget.controller.inputMode == InputMode.text &&
+                widget.controller.textCursorPosition != null)
+              Positioned(
+                left: (widget.controller.textCursorPosition!.dx * widget.controller.canvasScale +
+                        widget.controller.canvasOffset.dx) -
+                    1,
+                top: widget.controller.textCursorPosition!.dy * widget.controller.canvasScale +
+                    widget.controller.canvasOffset.dy,
+                child: IgnorePointer(
+                  child: _BlinkingCursor(
+                    child: Container(
+                      width: 2,
+                      height: 24,
+                      decoration: BoxDecoration(
+                        color: AppColors.gold,
+                        borderRadius: BorderRadius.circular(1),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            // 빠른 텍스트: 탭한 위치(또는 전송 후 아랫줄)에 깜빡이는 커서 (캔버스 좌표 → 화면 좌표)
+            if (widget.controller.inputMode == InputMode.quickText &&
+                widget.controller.quickTextCursorPosition != null)
+              Positioned(
+                left: widget.controller.quickTextCursorPosition!.dx * widget.controller.canvasScale +
+                    widget.controller.canvasOffset.dx -
+                    1,
+                top: widget.controller.quickTextCursorPosition!.dy * widget.controller.canvasScale +
+                    widget.controller.canvasOffset.dy,
+                child: IgnorePointer(
+                  child: _BlinkingCursor(
+                    child: Container(
+                      width: 2,
+                      height: 24,
+                      decoration: BoxDecoration(
+                        color: AppColors.gold,
+                        borderRadius: BorderRadius.circular(1),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
 
             // 지우개 호버 미리보기 (지우개 선택 시 + 배럴 버튼 사용 시 범위 표시)
             if (_eraserHoverPosition != null)
@@ -262,11 +295,13 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
                 ),
               ),
 
-            // 작성자 툴팁 (지우개 선택 시에는 표시 안 함 → 지우개 미리보기만)
+            // 작성자 툴팁 (지우개 선택 시·글씨 쓰는 중에는 표시 안 함)
             // IgnorePointer: 툴팁이 이벤트를 먹지 않아서 이미지 길게 누르기·이동이 정상 동작
             if (_hoveredAuthorName != null &&
                 _hoveredPosition != null &&
-                widget.controller.currentPen != PenType.eraser)
+                widget.controller.currentPen != PenType.eraser &&
+                widget.controller.currentStroke == null &&
+                _currentInputKind == null)
               Positioned(
                 left: _hoveredPosition!.dx + 10,
                 top: _hoveredPosition!.dy - 30,
@@ -288,43 +323,103 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
                 ),
               ),
 
-            // 시간순 네비게이션 바 (우측, 위·아래 버튼과 겹치지 않도록 bottom 여유)
-            Positioned(
-              right: 8,
-              top: 60,
-              bottom: 72,
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  return TimelineNavigator(
-                    strokes: widget.controller.serverStrokes,
-                    texts: widget.controller.serverTexts,
-                    media: widget.controller.serverMedia,
-                    onJump: (position) {
-                      final renderBox = context.findRenderObject() as RenderBox?;
-                      final size = renderBox?.size ?? const Size(400, 600);
-                      widget.controller.jumpToPosition(position, size);
-                    },
-                    logPublic: widget.logPublic,
-                  );
-                },
-              ),
-            ),
-
-            // 이벤트 이동 화살표 (우측 하단, 네비게이션 바 왼쪽에 배치해 겹침 방지)
-            Positioned(
-              right: 48,
-              bottom: 16,
-              child: _buildEventNavigationButtons(),
-            ),
                       ],
                     ),
                   ),
                 ),
 
+            // 업로드 중: 업로드될 위치에 아이콘 + 글씨만 표시 (박스 없음)
+            ...widget.controller.uploadingPlaceholders.map((p) => Positioned(
+                  left: p.x,
+                  top: p.y,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: AppColors.gold,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        '업로드 중…',
+                        style: TextStyle(
+                          color: AppColors.ink,
+                          fontSize: 14,
+                        ),
+                      ),
+                    ],
+                  ),
+                )),
+
+            // 미디어 오브젝트 (GestureDetector 밖에 두어 재생 버튼 등 터치가 미디어에 전달되도록)
+            ...widget.controller.serverMedia
+                .where((media) => media.url.isNotEmpty)
+                .map((media) => MediaWidget(
+              key: ValueKey(media.id),
+              media: media,
+              isSelected: widget.controller.selectedMedia?.id == media.id,
+              isResizeMode: widget.controller.isMediaInResizeMode(media.id),
+              pdfViewMode: media.type == MediaType.pdf ? widget.controller.getPdfViewMode(media.id) : null,
+              pdfCurrentPage: media.type == MediaType.pdf ? widget.controller.getPdfPage(media.id) : 1,
+              onPdfPageChanged: media.type == MediaType.pdf ? (page) => widget.controller.setPdfPage(media.id, page) : null,
+              onPdfPageCountLoaded: media.type == MediaType.pdf ? (count) => widget.controller.setPdfPageCount(media.id, count) : null,
+              cropRect: media.type == MediaType.image ? widget.controller.getMediaCropRect(media.id) : null,
+              canvasOffset: widget.controller.canvasOffset,
+              canvasScale: widget.controller.canvasScale,
+              onTap: () {
+                // 1번 터치 시 바텀시트 없음 — 친구 태그·잠금은 액션 바 '...' 메뉴에서 사용
+              },
+              onLongPress: () {
+                widget.controller.selectMedia(media);
+                widget.controller.enterMediaResizeMode(media.id);
+              },
+              onMove: (delta) => widget.controller.moveMedia(media.id, delta),
+              onResize: (width, height, {x, y}) => widget.controller.resizeMedia(media.id, width, height, x: x, y: y),
+              onResizeEnd: () => widget.controller.clearMediaResizeMode(),
+              onRotate: (angleDegrees) => widget.controller.rotateMedia(media.id, angleDegrees),
+              onSkew: (skewX, skewY) => widget.controller.skewMedia(media.id, skewX, skewY),
+              ignorePointer: _mediaIgnorePointer(media),
+            )),
+
             // 크기 조정·회전·반전 핸들 오버레이 — GestureDetector 밖에 두어 터치 시 캔버스가 경쟁하지 않음
             if (widget.controller.selectedMedia != null &&
                 widget.controller.isMediaInResizeMode(widget.controller.selectedMedia!.id))
               _buildMediaResizeOverlay(context, viewportSize),
+
+            // 시간순 네비게이션 바 + 위/아래 버튼 (같은 너비 24, 바 바로 아래 배치)
+            Positioned(
+              right: 8,
+              top: 60,
+              bottom: 24,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  return Column(
+                    children: [
+                      Expanded(
+                        child: TimelineNavigator(
+                          strokes: widget.controller.serverStrokes,
+                          texts: widget.controller.serverTexts,
+                          media: widget.controller.serverMedia,
+                          onJump: (position) {
+                            widget.controller.jumpToPosition(position, viewportSize);
+                          },
+                          logPublic: widget.logPublic,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      SizedBox(
+                        width: 24,
+                        child: _buildEventNavigationButtons(),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
               ],
             );
           },
@@ -497,15 +592,80 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     final gap = h * 0.15; // 이격 = 이미지 높이 50%
     final barTop = bottomView + gap;
     const barItemWidth = 52.0;
-    const barItemCount = 5;
+    const barItemCount = 6; // 복사·삭제·앞·뒤·자르기·...
     final barWidth = barItemWidth * barItemCount;
     var barLeft = mediaCenterInView.dx - barWidth / 2;
     barLeft = barLeft.clamp(barPadding, viewportSize.width - barWidth - barPadding);
+
+    // PDF 한 페이지 모드: 박스 밖 좌/우 화살표
+    const arrowBtnSize = 56.0;
+    final pdfArrowHalf = arrowBtnSize / 2;
+    final isPdfSingle = media.type == MediaType.pdf &&
+        widget.controller.getPdfViewMode(media.id) == PdfViewMode.singlePage;
+    final pdfPage = widget.controller.getPdfPage(media.id);
+    final pdfTotal = widget.controller.getPdfPageCount(media.id) ?? media.totalPages ?? 1;
+    final hasPrevPdf = pdfPage > 1;
+    final hasNextPdf = pdfPage < pdfTotal;
+    const pdfArrowGap = 25.0; // 박스와 화살표 버튼 사이 공백
+    final posPdfLeft = _mediaLocalToView(-pdfArrowHalf - pdfArrowGap, h / 2, x, y, w, h, cosA, sinA);
+    final posPdfRight = _mediaLocalToView(w + pdfArrowHalf + pdfArrowGap, h / 2, x, y, w, h, cosA, sinA);
 
     return Stack(
       clipBehavior: Clip.none,
       children: [
         ...resizeHandles,
+        if (isPdfSingle) ...[
+          Positioned(
+            left: posPdfLeft.dx - pdfArrowHalf,
+            top: posPdfLeft.dy - pdfArrowHalf,
+            width: arrowBtnSize,
+            height: arrowBtnSize,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: hasPrevPdf ? () => widget.controller.setPdfPage(media.id, pdfPage - 1) : null,
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: AppColors.paper.withValues(alpha: 0.95),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: AppColors.mediaActive, width: 1.5),
+                  ),
+                  child: Icon(
+                    Icons.chevron_left,
+                    size: 32,
+                    color: hasPrevPdf ? AppColors.ink : AppColors.ink.withValues(alpha: 0.4),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            left: posPdfRight.dx - pdfArrowHalf,
+            top: posPdfRight.dy - pdfArrowHalf,
+            width: arrowBtnSize,
+            height: arrowBtnSize,
+            child: GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTap: hasNextPdf ? () => widget.controller.setPdfPage(media.id, pdfPage + 1) : null,
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: AppColors.paper.withValues(alpha: 0.95),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: AppColors.mediaActive, width: 1.5),
+                  ),
+                  child: Icon(
+                    Icons.chevron_right,
+                    size: 32,
+                    color: hasNextPdf ? AppColors.ink : AppColors.ink.withValues(alpha: 0.4),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
         Positioned(
           left: posRotate.dx - flipHitHalf,
           top: posRotate.dy - flipHitHalf,
@@ -618,13 +778,40 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
                   _mediaBarButton(context, Icons.delete_outline, '삭제', () => widget.controller.deleteMedia(media.id)),
                   _mediaBarButton(context, Icons.flip_to_front, '앞', () => widget.controller.bringMediaToFront(media.id)),
                   _mediaBarButton(context, Icons.flip_to_back, '뒤', () => widget.controller.sendMediaToBack(media.id)),
-                  _mediaBarButton(context, Icons.crop, '자르기', () {
-                    if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('자르기 기능은 준비 중입니다.')),
-                      );
-                    }
-                  }),
+                  _mediaBarButton(
+                    context,
+                    Icons.crop,
+                    '자르기',
+                    media.type == MediaType.pdf
+                        ? () {
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('PDF는 자르기를 지원하지 않습니다.')),
+                              );
+                            }
+                          }
+                        : () {
+                            if (!context.mounted) return;
+                            if (media.type == MediaType.video) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(content: Text('영상은 자르기를 지원하지 않습니다.')),
+                              );
+                              return;
+                            }
+                            Navigator.of(context).push<void>(
+                              MaterialPageRoute(
+                                builder: (context) => ImageCropScreen(
+                                  media: media,
+                                  initialCropRect: widget.controller.getMediaCropRect(media.id),
+                                  onConfirm: (rect) => widget.controller.setMediaCropRect(media.id, rect),
+                                  onCancel: () {},
+                                ),
+                              ),
+                            );
+                          },
+                    enabled: media.type == MediaType.image,
+                  ),
+                  _mediaBarButton(context, Icons.more_horiz, '...', () => _showMediaMoreMenu(context, media, barLeft, barTop, barWidth)),
                 ],
               ),
             ),
@@ -634,7 +821,100 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     );
   }
 
-  Widget _mediaBarButton(BuildContext context, IconData icon, String label, VoidCallback onTap) {
+  /// 액션 바 '...' 메뉴 — 친구 태그·잠금 (사진/영상/PDF 공통), PDF일 때 정렬 방식 포함
+  void _showMediaMoreMenu(BuildContext context, MediaModel media, double barLeft, double barTop, double barWidth) {
+    const barItemWidth = 52.0;
+    final buttonRight = barLeft + barWidth;
+    final buttonLeft = buttonRight - barItemWidth;
+
+    // 메뉴 항목: 'tag' | 'lock' | 'pdf_single' | 'pdf_grid'
+    final items = <PopupMenuItem<String>>[
+      PopupMenuItem<String>(
+        value: 'tag',
+        child: Row(
+          children: [
+            const Icon(Icons.tag, size: 20, color: AppColors.ink),
+            const SizedBox(width: 12),
+            const Text('@친구 태그'),
+          ],
+        ),
+      ),
+      PopupMenuItem<String>(
+        value: 'lock',
+        child: Row(
+          children: [
+            Icon(
+              media.isLocked ? Icons.lock_open : Icons.lock,
+              size: 20,
+              color: AppColors.ink,
+            ),
+            const SizedBox(width: 12),
+            Text(media.isLocked ? '잠금 해제' : '잠금'),
+          ],
+        ),
+      ),
+      if (media.type == MediaType.pdf) ...[
+        PopupMenuItem<String>(
+          value: 'pdf_single',
+          child: Row(
+            children: [
+              Icon(
+                Icons.view_agenda,
+                size: 20,
+                color: widget.controller.getPdfViewMode(media.id) == PdfViewMode.singlePage
+                    ? AppColors.gold
+                    : AppColors.ink,
+              ),
+              const SizedBox(width: 12),
+              const Text('한 페이지 (화살표)'),
+            ],
+          ),
+        ),
+        PopupMenuItem<String>(
+          value: 'pdf_grid',
+          child: Row(
+            children: [
+              Icon(
+                Icons.grid_view,
+                size: 20,
+                color: widget.controller.getPdfViewMode(media.id) == PdfViewMode.grid
+                    ? AppColors.gold
+                    : AppColors.ink,
+              ),
+              const SizedBox(width: 12),
+              const Text('여러 페이지 (그리드)'),
+            ],
+          ),
+        ),
+      ],
+    ];
+
+    showMenu<String>(
+      context: context,
+      position: RelativeRect.fromLTRB(buttonLeft, barTop - 220, buttonRight + 8, barTop + 8),
+      items: items,
+    ).then((value) {
+      if (value == null) return;
+      switch (value) {
+        case 'tag':
+          _showTagFriendPicker(context, media);
+          break;
+        case 'lock':
+          widget.controller.setMediaLocked(media.id, !media.isLocked);
+          break;
+        case 'pdf_single':
+          widget.controller.setPdfViewMode(media.id, PdfViewMode.singlePage);
+          break;
+        case 'pdf_grid':
+          widget.controller.setPdfViewMode(media.id, PdfViewMode.grid);
+          break;
+      }
+    });
+  }
+
+  Widget _mediaBarButton(BuildContext context, IconData icon, String label, VoidCallback onTap, {bool enabled = true}) {
+    final color = enabled ? AppColors.mediaActive : AppColors.mutedGray;
+    final textColor = enabled ? AppColors.ink : AppColors.mutedGray;
     return SizedBox(
       width: 48,
       child: InkWell(
@@ -644,11 +924,11 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
           mainAxisSize: MainAxisSize.min,
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 20, color: AppColors.mediaActive),
+            Icon(icon, size: 20, color: color),
             const SizedBox(height: 4),
             Text(
               label,
-              style: const TextStyle(fontSize: 11, color: AppColors.ink),
+              style: TextStyle(fontSize: 11, color: textColor),
               overflow: TextOverflow.ellipsis,
               maxLines: 1,
             ),
@@ -681,7 +961,7 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
             text.content ?? '',
             style: TextStyle(
               color: AppColors.ink,
-              fontSize: 16 * scale,
+              fontSize: (text.fontSize ?? 16) * scale,
             ),
           ),
         ),
@@ -722,139 +1002,6 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
               const SizedBox(height: 16),
             ],
           ),
-        );
-      },
-    );
-  }
-
-  /// 미디어 옵션 메뉴 (롱프레스)
-  void _showMediaOptions(BuildContext context, MediaModel media) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (context) {
-        return Stack(
-          children: [
-            // Dim 배경
-            GestureDetector(
-              onTap: () => Navigator.pop(context),
-              child: Container(
-                color: Colors.black.withValues(alpha: 0.5),
-              ),
-            ),
-            // 옵션 메뉴
-            Positioned(
-              left: 16,
-              right: 16,
-              bottom: 16,
-              child: SafeArea(
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: AppColors.paper,
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 40,
-                        height: 4,
-                        margin: const EdgeInsets.symmetric(vertical: 12),
-                        decoration: BoxDecoration(
-                          color: AppColors.border,
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                      ),
-                      // 투명도 조절
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.opacity, color: AppColors.ink),
-                            const SizedBox(width: 12),
-                            const Text('투명도'),
-                            Expanded(
-                              child: StatefulBuilder(
-                                builder: (context, setState) {
-                                  double opacity = media.opacity;
-                                  return Slider(
-                                    value: opacity,
-                                    min: 0.1,
-                                    max: 1.0,
-                                    activeColor: AppColors.gold,
-                                    onChanged: (value) {
-                                      setState(() => opacity = value);
-                                    },
-                                    onChangeEnd: (value) {
-                                      widget.controller.setMediaOpacity(media.id, value);
-                                    },
-                                  );
-                                },
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const Divider(height: 1),
-                      ListTile(
-                        leading: const Icon(Icons.tag, color: AppColors.ink),
-                        title: const Text('@친구 태그'),
-                        onTap: () {
-                          Navigator.pop(context);
-                          _showTagFriendPicker(context, media);
-                        },
-                      ),
-                      ListTile(
-                        leading: Icon(
-                          media.isLocked ? Icons.lock_open : Icons.lock,
-                          color: AppColors.ink,
-                        ),
-                        title: Text(media.isLocked ? '잠금 해제' : '잠금'),
-                        onTap: () {
-                          Navigator.pop(context);
-                          widget.controller.setMediaLocked(media.id, !media.isLocked);
-                        },
-                      ),
-                      ListTile(
-                        leading: const Icon(Icons.aspect_ratio, color: AppColors.ink),
-                        title: const Text('크기 수정'),
-                        onTap: () {
-                          Navigator.pop(context);
-                          widget.controller.enterMediaResizeMode(media.id);
-                        },
-                      ),
-                      ListTile(
-                        leading: const Icon(Icons.flip_to_front, color: AppColors.ink),
-                        title: const Text('앞으로'),
-                        onTap: () {
-                          Navigator.pop(context);
-                          widget.controller.bringMediaToFront(media.id);
-                        },
-                      ),
-                      ListTile(
-                        leading: const Icon(Icons.flip_to_back, color: AppColors.ink),
-                        title: const Text('뒤로'),
-                        onTap: () {
-                          Navigator.pop(context);
-                          widget.controller.sendMediaToBack(media.id);
-                        },
-                      ),
-                      const Divider(height: 1),
-                      ListTile(
-                        leading: const Icon(Icons.delete_outline, color: Colors.red),
-                        title: const Text('삭제', style: TextStyle(color: Colors.red)),
-                        onTap: () {
-                          Navigator.pop(context);
-                          widget.controller.deleteMedia(media.id);
-                        },
-                      ),
-                      const SizedBox(height: 8),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ],
         );
       },
     );
@@ -1051,8 +1198,8 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     for (final stroke in widget.controller.localStrokes.reversed) {
       final id = stroke.firestoreId ?? stroke.id;
       for (final p in stroke.points) {
-        if ((p - canvasPoint).distance <= hitRadius) {
-          final (minX, maxX, minY, maxY) = _strokeBounds(stroke.points);
+        if ((p.offset - canvasPoint).distance <= hitRadius) {
+          final (minX, maxX, minY, maxY) = _strokeBounds(stroke.points.map((p) => p.offset));
           return (
             strokeId: id,
             areaX: minX,
@@ -1172,12 +1319,12 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     );
   }
 
-  /// 이벤트 단위 이동 버튼
+  /// 이벤트 단위 이동 버튼 (네비게이션 바와 같은 너비 24)
   Widget _buildEventNavigationButtons() {
     return Container(
       decoration: BoxDecoration(
         color: AppColors.paper,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(color: AppColors.border),
         boxShadow: [
           BoxShadow(
@@ -1189,110 +1336,101 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          // 이전 이벤트
-          IconButton(
-            onPressed: _goToPreviousEvent,
-            icon: const Icon(Icons.keyboard_arrow_up),
-            iconSize: 24,
-            color: AppColors.ink,
-            tooltip: '이전 이벤트',
+          SizedBox(
+            width: 24,
+            height: 32,
+            child: IconButton(
+              onPressed: _goToPreviousEvent,
+              icon: const Icon(Icons.keyboard_arrow_up),
+              iconSize: 20,
+              padding: EdgeInsets.zero,
+              style: IconButton.styleFrom(
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              color: AppColors.ink,
+              tooltip: '이전 이벤트',
+            ),
           ),
-          Container(
-            width: 20,
-            height: 1,
-            color: AppColors.border,
-          ),
-          // 다음 이벤트
-          IconButton(
-            onPressed: _goToNextEvent,
-            icon: const Icon(Icons.keyboard_arrow_down),
-            iconSize: 24,
-            color: AppColors.ink,
-            tooltip: '다음 이벤트',
+          Container(width: 24, height: 1, color: AppColors.border),
+          SizedBox(
+            width: 24,
+            height: 32,
+            child: IconButton(
+              onPressed: _goToNextEvent,
+              icon: const Icon(Icons.keyboard_arrow_down),
+              iconSize: 20,
+              padding: EdgeInsets.zero,
+              style: IconButton.styleFrom(
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              color: AppColors.ink,
+              tooltip: '다음 이벤트',
+            ),
           ),
         ],
       ),
     );
   }
 
-  /// 모든 이벤트 목록 가져오기
-  List<_TimelineEvent> _getAllEvents() {
-    final events = <_TimelineEvent>[];
-
-    // 스트로크
-    for (final stroke in widget.controller.serverStrokes) {
-      if (stroke.points.isNotEmpty) {
-        events.add(_TimelineEvent(
-          x: stroke.points.first.x,
-          y: stroke.points.first.y,
-          timestamp: stroke.createdAt,
-        ));
-      }
-    }
-
-    // 텍스트
-    for (final text in widget.controller.serverTexts) {
-      events.add(_TimelineEvent(
-        x: text.positionX ?? 0,
-        y: text.positionY ?? 0,
-        timestamp: text.createdAt,
-      ));
-    }
-
-    // 미디어
-    for (final m in widget.controller.serverMedia) {
-      events.add(_TimelineEvent(
-        x: m.x,
-        y: m.y,
-        timestamp: m.createdAt,
-      ));
-    }
-
-    // 시간순 정렬
-    events.sort((a, b) => a.timestamp.compareTo(b.timestamp));
-    return events;
+  /// 문장 단위(3초 휴식 기준) 세그먼트 목록
+  List<TimelineSegment> _getAllSegments() {
+    return TimelineNavigator.buildSegments(
+      strokes: widget.controller.serverStrokes,
+      texts: widget.controller.serverTexts,
+      media: widget.controller.serverMedia,
+    );
   }
 
-  /// 이전 이벤트로 이동
+  /// 이전 세그먼트(문장)로 이동
   void _goToPreviousEvent() {
-    final events = _getAllEvents();
-    if (events.isEmpty) return;
+    final segments = _getAllSegments();
+    if (segments.isEmpty) return;
 
     setState(() {
-      _currentEventIndex = (_currentEventIndex - 1).clamp(0, events.length - 1);
+      _currentEventIndex = (_currentEventIndex - 1).clamp(0, segments.length - 1);
     });
 
-    final event = events[_currentEventIndex];
-    final renderBox = context.findRenderObject() as RenderBox?;
-    final size = renderBox?.size ?? const Size(400, 600);
-    widget.controller.jumpToPosition(Offset(event.x, event.y), size);
+    final seg = segments[_currentEventIndex];
+    final size = widget.controller.viewportSize ?? const Size(400, 600);
+    final cx = seg.centerX ?? seg.x;
+    final cy = seg.centerY ?? seg.y;
+    widget.controller.jumpToPosition(Offset(cx, cy), size);
   }
 
-  /// 다음 이벤트로 이동
+  /// 다음 세그먼트(문장)로 이동
   void _goToNextEvent() {
-    final events = _getAllEvents();
-    if (events.isEmpty) return;
+    final segments = _getAllSegments();
+    if (segments.isEmpty) return;
 
     setState(() {
-      _currentEventIndex = (_currentEventIndex + 1).clamp(0, events.length - 1);
+      _currentEventIndex = (_currentEventIndex + 1).clamp(0, segments.length - 1);
     });
 
-    final event = events[_currentEventIndex];
-    final renderBox = context.findRenderObject() as RenderBox?;
-    final size = renderBox?.size ?? const Size(400, 600);
-    widget.controller.jumpToPosition(Offset(event.x, event.y), size);
+    final seg = segments[_currentEventIndex];
+    final size = widget.controller.viewportSize ?? const Size(400, 600);
+    final cx = seg.centerX ?? seg.x;
+    final cy = seg.centerY ?? seg.y;
+    widget.controller.jumpToPosition(Offset(cx, cy), size);
   }
 
   void _onPointerDown(PointerDownEvent event) {
     _currentInputKind = event.kind;
     _clearTooltip();
 
-    // 손글씨는 스타일러스·마우스만 (손 터치로는 손글씨 안 됨)
+    // 선택 도구: 스타일러스·마우스·손가락 모두 허용. 도형: 손가락으로 그리기 허용.
+    final isSelectionMode = widget.controller.selectionTool != SelectionTool.none;
+    final isShapeMode = widget.controller.inputMode == InputMode.shape;
     final isStylus = event.kind == PointerDeviceKind.stylus ||
         event.kind == PointerDeviceKind.invertedStylus;
+    final isPointerForInput = isStylus || event.kind == PointerDeviceKind.mouse ||
+        (isSelectionMode && event.kind == PointerDeviceKind.touch) ||
+        (isShapeMode && event.kind == PointerDeviceKind.touch);
 
-    if (isStylus || event.kind == PointerDeviceKind.mouse) {
+    if (isPointerForInput) {
       final localPoint = _transformPoint(event.localPosition);
       final forceEraser = event.kind == PointerDeviceKind.invertedStylus ||
           (event.buttons & kSecondaryStylusButton) != 0 ||
@@ -1300,23 +1438,47 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
       if (widget.controller.currentPen == PenType.eraser || forceEraser) {
         setState(() => _eraserHoverPosition = event.localPosition);
       }
+
+      // 선택 도구: 선택 영역 그리기 또는 선택된 항목(손글씨·미디어·텍스트) 이동
+      if (widget.controller.selectionTool != SelectionTool.none) {
+        if (widget.controller.hasSelectedStrokesOrMediaOrText &&
+            widget.controller.isPointOnSelectedSelection(localPoint)) {
+          widget.controller.startMovingSelection(localPoint);
+        } else {
+          widget.controller.startSelection(localPoint);
+        }
+        return;
+      }
       
       if (widget.controller.inputMode == InputMode.shape) {
         widget.controller.startShape(localPoint);
         return;
       }
       
-      widget.controller.startStroke(localPoint, forceEraser: forceEraser);
+      widget.controller.startStroke(
+        localPoint,
+        forceEraser: forceEraser,
+        pressure: event.pressure,
+        timestamp: event.timeStamp.inMilliseconds,
+      );
     }
   }
 
   void _onPointerMove(PointerMoveEvent event) {
     if (_currentInputKind == null) return;
 
+    // 글씨 쓰는 중에는 닉네임 툴팁 즉시 숨김
+    if (_hoveredAuthorName != null) _clearTooltip();
+
     final isStylus = _currentInputKind == PointerDeviceKind.stylus ||
         _currentInputKind == PointerDeviceKind.invertedStylus;
+    final isSelectionMode = widget.controller.selectionTool != SelectionTool.none;
+    final isShapeMode = widget.controller.inputMode == InputMode.shape;
+    final isPointerForInput = isStylus || _currentInputKind == PointerDeviceKind.mouse ||
+        (isSelectionMode && _currentInputKind == PointerDeviceKind.touch) ||
+        (isShapeMode && _currentInputKind == PointerDeviceKind.touch);
 
-    if (isStylus || _currentInputKind == PointerDeviceKind.mouse) {
+    if (isPointerForInput) {
       final localPoint = _transformPoint(event.localPosition);
       final forceEraser = _currentInputKind == PointerDeviceKind.invertedStylus ||
           (event.buttons & kSecondaryStylusButton) != 0 ||
@@ -1324,23 +1486,52 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
       if (widget.controller.currentPen == PenType.eraser || forceEraser) {
         setState(() => _eraserHoverPosition = event.localPosition);
       }
+
+      if (widget.controller.isMovingSelection) {
+        widget.controller.updateMovingSelection(localPoint);
+        return;
+      }
+      if (widget.controller.isDrawingSelection) {
+        widget.controller.updateSelection(localPoint);
+        return;
+      }
       
-      if (widget.controller.inputMode == InputMode.shape) {
+      if (isShapeMode) {
         widget.controller.updateShape(localPoint);
         return;
       }
       
-      widget.controller.updateStroke(localPoint, forceEraser: forceEraser);
+      widget.controller.updateStroke(
+        localPoint,
+        forceEraser: forceEraser,
+        pressure: event.pressure,
+        timestamp: event.timeStamp.inMilliseconds,
+      );
     }
   }
 
   void _onPointerUp(PointerUpEvent event) {
     final isStylus = _currentInputKind == PointerDeviceKind.stylus ||
         _currentInputKind == PointerDeviceKind.invertedStylus;
+    final isSelectionMode = widget.controller.selectionTool != SelectionTool.none;
+    final isShapeMode = widget.controller.inputMode == InputMode.shape;
+    final isPointerForInput = isStylus || _currentInputKind == PointerDeviceKind.mouse ||
+        (isSelectionMode && _currentInputKind == PointerDeviceKind.touch) ||
+        (isShapeMode && _currentInputKind == PointerDeviceKind.touch);
 
-    if (isStylus || _currentInputKind == PointerDeviceKind.mouse) {
+    if (isPointerForInput) {
       setState(() => _eraserHoverPosition = null);
-      if (widget.controller.inputMode == InputMode.shape) {
+      if (widget.controller.isMovingSelection) {
+        widget.controller.endMovingSelection();
+        _currentInputKind = null;
+        return;
+      }
+      if (widget.controller.isDrawingSelection) {
+        widget.controller.endSelection();
+        _currentInputKind = null;
+        return;
+      }
+      if (isShapeMode) {
         widget.controller.endShape();
         _currentInputKind = null;
         return;
@@ -1380,6 +1571,17 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     if (!isStylus) {
       _eraserHoverHideTimer?.cancel();
       setState(() => _eraserHoverPosition = null);
+      return;
+    }
+
+    // 글씨 쓰는 중(포인터 내려감)에는 닉네임 표시 안 함
+    if (_currentInputKind != null || widget.controller.currentStroke != null) {
+      _eraserHoverHideTimer?.cancel();
+      setState(() {
+        _eraserHoverPosition = null;
+        _hoveredAuthorName = null;
+        _hoveredPosition = null;
+      });
       return;
     }
 
@@ -1441,67 +1643,107 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
       }
     }
 
-    // 텍스트 입력 모드
+    // 텍스트 입력 모드: 손가락으로 누른 위치에 커서 표시 후 다이얼로그
     if (widget.controller.inputMode == InputMode.text) {
+      widget.controller.setTextCursorPosition(localPoint);
       _showTextInputDialog(localPoint);
       return;
     }
 
-    // 작성자 표시: 펜(스타일러스)일 때만 (손가락 탭에서는 표시 안 함)
+    // 빠른 텍스트 모드: 손가락으로 누른 위치에 커서 표시(깜빡임), 키보드로 입력 후 전송 시 그 위치에 글 씀
+    if (widget.controller.inputMode == InputMode.quickText) {
+      widget.controller.setQuickTextCursorPosition(localPoint);
+      return;
+    }
+
+    // 작성자 표시: 손가락 탭에서만 (펜 뗄 때 탭으로 인식되면 닉네임 뜨는 것 방지)
+    // 스타일러스는 펜 뗄 때 onTapUp이 불려 글씨 쓴 직후 닉네임이 보이므로, 호버로만 표시
     final isStylus = _currentInputKind == PointerDeviceKind.stylus ||
         _currentInputKind == PointerDeviceKind.invertedStylus;
-    if (isStylus) {
+    if (!isStylus) {
       _checkAuthorAtPoint(localPoint, details.localPosition);
     }
   }
 
-  /// 텍스트 입력 다이얼로그
+  /// 텍스트 입력 다이얼로그 (엔터=다음 줄, 추가 버튼으로만 제출. 글자 크기는 툴바 설정과 동기화)
   void _showTextInputDialog(Offset position) {
     final textController = TextEditingController();
-    
+    double selectedFontSize = widget.controller.textFontSize;
+
     showDialog(
       context: context,
       builder: (context) {
-        return AlertDialog(
-          backgroundColor: AppColors.paper,
-          title: const Text('텍스트 입력'),
-          content: TextField(
-            controller: textController,
-            autofocus: true,
-            decoration: const InputDecoration(
-              hintText: '텍스트를 입력하세요',
-              border: OutlineInputBorder(),
-            ),
-            maxLines: 3,
-            onSubmitted: (value) {
-              if (value.isNotEmpty) {
-                widget.controller.addText(value, position);
-                Navigator.pop(context);
-              }
-            },
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('취소'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                if (textController.text.isNotEmpty) {
-                  widget.controller.addText(textController.text, position);
-                  Navigator.pop(context);
-                }
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.gold,
-                foregroundColor: Colors.white,
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: AppColors.paper,
+              title: const Text('텍스트 입력'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('글자 크기(pt)', style: TextStyle(fontSize: 12, color: AppColors.mutedGray)),
+                    const SizedBox(height: 4),
+                    DropdownButton<double>(
+                      value: [12, 14, 16, 18, 20, 24, 28, 32, 40, 48, 56, 64, 72, 80, 96, 128].contains(selectedFontSize.round())
+                          ? selectedFontSize
+                          : 16.0,
+                      isExpanded: true,
+                      items: [12, 14, 16, 18, 20, 24, 28, 32, 40, 48, 56, 64, 72, 80, 96, 128]
+                          .map((v) => DropdownMenuItem(value: v.toDouble(), child: Text('$v pt')))
+                          .toList(),
+                      onChanged: (v) {
+                        if (v != null) {
+                          setDialogState(() => selectedFontSize = v);
+                          widget.controller.setTextFontSize(v);
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: textController,
+                      autofocus: true,
+                      keyboardType: TextInputType.multiline,
+                      maxLines: 5,
+                      style: const TextStyle(color: AppColors.ink, fontSize: 16),
+                      decoration: const InputDecoration(
+                        hintText: '텍스트를 입력하세요 (엔터: 다음 줄)',
+                        hintStyle: TextStyle(color: AppColors.mutedGray),
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              child: const Text('추가'),
-            ),
-          ],
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('취소'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    if (textController.text.isNotEmpty) {
+                      widget.controller.addText(
+                        textController.text,
+                        position,
+                        fontSize: widget.controller.textFontSize,
+                      );
+                      Navigator.pop(context);
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.gold,
+                    foregroundColor: Colors.white,
+                  ),
+                  child: const Text('추가'),
+                ),
+              ],
+            );
+          },
         );
       },
-    );
+    ).then((_) => widget.controller.clearTextCursorPosition());
   }
 
   /// senderId → 표시 이름 (채팅방 멤버/현재 사용자 조회)
@@ -1576,7 +1818,7 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
         final radius = math.max(
             _minStrokeHitRadius, stroke.strokeWidth * 0.5 + _hoverMargin);
         for (final p in stroke.points) {
-          if ((p - canvasPoint).distance < radius) {
+          if ((p.offset - canvasPoint).distance < radius) {
             authorName = stroke.senderName ??
                 _displayNameForSender(stroke.senderId) ??
                 '사용자 ${stroke.senderId.length >= 6 ? stroke.senderId.substring(0, 6) : stroke.senderId}';
@@ -1669,6 +1911,12 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
             _currentInputKind == PointerDeviceKind.invertedStylus ||
             _currentInputKind == PointerDeviceKind.mouse;
         if (isPenOrMouse) return;
+        if (widget.controller.selectionTool != SelectionTool.none &&
+            (widget.controller.isDrawingSelection || widget.controller.isMovingSelection)) {
+          return;
+        }
+        // 도형 그리는 중에는 캔버스 팬 안 함 (손가락으로 도형 그릴 때 캔버스 고정)
+        if (widget.controller.shapeStartPoint != null) return;
         widget.controller.pan(details.focalPointDelta);
       } else if (details.pointerCount == 2) {
         final newScale = (_pinchStartCanvasScale * details.scale).clamp(0.1, 5.0);
@@ -1679,6 +1927,9 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
   }
 
   void _onScaleEnd(ScaleEndDetails details) {
+    if (_gestureTarget == _GestureTarget.media && _activeMediaId != null) {
+      widget.controller.moveMediaEnd(_activeMediaId!);
+    }
     _gestureTarget = _GestureTarget.none;
     _activeMediaId = null;
   }
@@ -1686,6 +1937,46 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
   /// 화면 좌표를 캔버스 좌표로 변환
   Offset _transformPoint(Offset screenPoint) {
     return (screenPoint - widget.controller.canvasOffset) / widget.controller.canvasScale;
+  }
+}
+
+/// 깜빡이는 커서 (위치 지정 텍스트 모드)
+class _BlinkingCursor extends StatefulWidget {
+  final Widget child;
+
+  const _BlinkingCursor({required this.child});
+
+  @override
+  State<_BlinkingCursor> createState() => _BlinkingCursorState();
+}
+
+class _BlinkingCursorState extends State<_BlinkingCursor>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _animation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 530),
+    );
+    _animation = Tween<double>(begin: 0, end: 1).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
+    );
+    _controller.repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(opacity: _animation, child: widget.child);
   }
 }
 
@@ -1711,6 +2002,13 @@ class _CanvasPainter extends CustomPainter {
   final double gridSize;
   final Rect? highlightTagRect;
   final bool strokesOnly;
+  final List<Offset>? selectionPath;
+  final (Offset, Offset)? selectionRect;
+  final Set<String> selectedStrokeIds;
+  final Set<String> selectedMediaIds;
+  final Set<String> selectedTextIds;
+  final List<MediaModel> serverMedia;
+  final List<MessageModel> serverTexts;
 
   _CanvasPainter({
     required this.serverStrokes,
@@ -1733,6 +2031,13 @@ class _CanvasPainter extends CustomPainter {
     required this.gridSize,
     this.highlightTagRect,
     this.strokesOnly = false,
+    this.selectionPath,
+    this.selectionRect,
+    this.selectedStrokeIds = const {},
+    this.selectedMediaIds = const {},
+    this.selectedTextIds = const {},
+    this.serverMedia = const [],
+    this.serverTexts = const [],
   });
 
   @override
@@ -1780,22 +2085,101 @@ class _CanvasPainter extends CustomPainter {
       for (final stroke in serverStrokes) {
         _drawServerStroke(canvas, stroke);
       }
-      // 로컬 스트로크 (아직 확정 안 된 것 - 고스트)
+      // 로컬 스트로크 (아직 확정 안 된 것 - 고스트). 0.9로 통일해 찐/흐린 편차 완화
       for (final stroke in localStrokes) {
-        final opacity = stroke.isConfirmed ? 1.0 : 0.6;
+        final opacity = stroke.isConfirmed ? 1.0 : 0.9;
         _drawLocalStroke(canvas, stroke, opacity);
       }
       // 다른 사용자의 고스트 스트로크
       for (final stroke in ghostStrokes) {
-        _drawLocalStroke(canvas, stroke, 0.4);
+        _drawLocalStroke(canvas, stroke, 0.75);
       }
-      // 현재 그리는 중인 스트로크
+      // 현재 그리는 중인 스트로크 (저장 직후와 동일한 0.9로 자연스럽게)
       if (currentStroke != null) {
-        _drawLocalStroke(canvas, currentStroke!, 0.7);
+        _drawLocalStroke(canvas, currentStroke!, 0.9);
       }
+      // 선택 영역 그리기 (올가미/사각형)
+      _drawSelectionOverlay(canvas);
+      // 선택된 스트로크 하이라이트
+      _drawSelectedStrokeHighlights(canvas);
+      // 선택된 미디어·텍스트 하이라이트
+      _drawSelectedMediaAndTextHighlights(canvas);
     }
 
     canvas.restore();
+  }
+
+  void _drawSelectedMediaAndTextHighlights(Canvas canvas) {
+    if (selectedMediaIds.isEmpty && selectedTextIds.isEmpty) return;
+    final paint = Paint()
+      ..color = AppColors.gold.withValues(alpha: 0.6)
+      ..strokeWidth = 3
+      ..style = PaintingStyle.stroke;
+    for (final media in serverMedia) {
+      if (!selectedMediaIds.contains(media.id)) continue;
+      final rect = Rect.fromLTWH(media.x, media.y, media.width, media.height);
+      canvas.drawRect(rect.inflate(2), paint);
+    }
+    for (final text in serverTexts) {
+      if (!selectedTextIds.contains(text.id)) continue;
+      final x = text.positionX ?? 0.0;
+      final y = text.positionY ?? 0.0;
+      final w = (text.width != null && text.width! > 0)
+          ? text.width!
+          : ((text.content?.length ?? 0) * 10.0).clamp(40.0, 400.0);
+      final h = text.height ?? 24.0;
+      canvas.drawRect(Rect.fromLTWH(x, y, w, h).inflate(2), paint);
+    }
+  }
+
+  void _drawSelectionOverlay(Canvas canvas) {
+    final strokePaint = Paint()
+      ..color = AppColors.gold.withValues(alpha: 0.8)
+      ..strokeWidth = 2
+      ..style = PaintingStyle.stroke;
+
+    if (selectionPath != null && selectionPath!.length >= 2) {
+      final path = Path()..moveTo(selectionPath!.first.dx, selectionPath!.first.dy);
+      for (int i = 1; i < selectionPath!.length; i++) {
+        path.lineTo(selectionPath![i].dx, selectionPath![i].dy);
+      }
+      path.close();
+      canvas.drawPath(path, strokePaint);
+    } else if (selectionRect != null) {
+      final (a, b) = selectionRect!;
+      canvas.drawRect(Rect.fromPoints(a, b), strokePaint);
+    }
+  }
+
+  void _drawSelectedStrokeHighlights(Canvas canvas) {
+    if (selectedStrokeIds.isEmpty) return;
+    final paint = Paint()
+      ..color = AppColors.gold.withValues(alpha: 0.4)
+      ..strokeWidth = 3
+      ..style = PaintingStyle.stroke;
+    for (final stroke in serverStrokes) {
+      if (!selectedStrokeIds.contains(stroke.id)) continue;
+      final bbox = _strokeBBox(stroke.points.map((p) => Offset(p.x, p.y)).toList());
+      canvas.drawRect(bbox.inflate(4), paint);
+    }
+    for (final stroke in localStrokes) {
+      final id = stroke.firestoreId ?? stroke.id;
+      if (!selectedStrokeIds.contains(id)) continue;
+      final bbox = _strokeBBox(stroke.points.map((p) => p.offset).toList());
+      canvas.drawRect(bbox.inflate(4), paint);
+    }
+  }
+
+  Rect _strokeBBox(List<Offset> points) {
+    if (points.isEmpty) return Rect.zero;
+    double minX = points.first.dx, maxX = minX, minY = points.first.dy, maxY = minY;
+    for (final p in points) {
+      if (p.dx < minX) minX = p.dx;
+      if (p.dx > maxX) maxX = p.dx;
+      if (p.dy < minY) minY = p.dy;
+      if (p.dy > maxY) maxY = p.dy;
+    }
+    return Rect.fromLTRB(minX, minY, maxX, maxY);
   }
 
   void _drawShape(Canvas canvas, ShapeModel shape, bool isSelected) {
@@ -1972,42 +2356,125 @@ class _CanvasPainter extends CustomPainter {
     }
   }
 
+  /// perfect_freehand thinning (필압 영향도). 0=무시, 1=강함
+  static double _thinningForPen(String penType) {
+    switch (penType) {
+      case 'pen1': return 0.25;   // 볼펜: 적은 변화
+      case 'pen2': return 0.5;    // 연필: 중간
+      case 'fountain': return 0.75; // 만년필: 강한 변화
+      case 'brush': return 0.7;   // 브러시: 강한 변화
+      default: return 0.5;
+    }
+  }
+
+  static bool _isPressureSensitivePen(String penType) {
+    return penType != 'highlighter';
+  }
+
+  /// 아웃라인 포인트를 베지어 곡선으로 부드럽게 연결 (각진 꼭짓점 완화)
+  Path _smoothOutlinePath(List<Offset> outline) {
+    final n = outline.length;
+    if (n < 3) return Path();
+    final path = Path();
+    final p = outline;
+    path.moveTo((p[n - 1].dx + p[0].dx) / 2, (p[n - 1].dy + p[0].dy) / 2);
+    for (int i = 0; i < n; i++) {
+      final next = (i + 1) % n;
+      path.quadraticBezierTo(
+        p[i].dx,
+        p[i].dy,
+        (p[i].dx + p[next].dx) / 2,
+        (p[i].dy + p[next].dy) / 2,
+      );
+    }
+    path.close();
+    return path;
+  }
+
+  /// perfect_freehand로 부드러운 가변 굵기 스트로크 그리기 (얼룩 현상 제거)
+  void _drawStrokeWithFreehand(
+    Canvas canvas,
+    List<PointVector> points,
+    Color color,
+    double baseWidth,
+    String penType,
+  ) {
+    if (points.length < 2) {
+      if (points.length == 1) {
+        final p = points.first;
+        final r = baseWidth / 2 * (0.5 + 0.5 * (p.pressure ?? 1.0));
+        canvas.drawCircle(Offset(p.x, p.y), r, Paint()..color = color..style = PaintingStyle.fill);
+      }
+      return;
+    }
+    // streamline 낮춤: 빠르게 쓸 때 실제 궤적을 따라가도록 (높으면 빠른 입력이 지나치게 단순화됨)
+    final outline = getStroke(
+      points,
+      options: StrokeOptions(
+        size: baseWidth,
+        thinning: _thinningForPen(penType),
+        smoothing: 0.6,   // 적당히 부드럽게 (0.9→0.6, 빠른 스트로크 보존)
+        streamline: 0.4,  // 입력 경로 충실히 유지 (0.8→0.4, 빠르게 써도 따라옴)
+        simulatePressure: false,
+        isComplete: true,
+      ),
+    );
+    if (outline.length < 3) return;
+    // 베지어 곡선으로 아웃라인 부드럽게 (각진 꼭짓점 완화)
+    final path = _smoothOutlinePath(outline);
+    canvas.drawPath(path, Paint()..color = color..style = PaintingStyle.fill);
+  }
+
   void _drawServerStroke(Canvas canvas, StrokeModel stroke) {
     if (stroke.points.isEmpty) return;
 
-    // HEX 색상 파싱
     final colorHex = stroke.style.color.replaceAll('#', '');
     final colorValue = int.parse(colorHex, radix: 16);
     Color color = Color(colorValue | 0xFF000000);
 
-    double opacity = stroke.isConfirmed ? 1.0 : 0.6;
+    double opacity = stroke.isConfirmed ? 1.0 : 0.9;
     if (stroke.style.penType == 'highlighter') {
-      opacity *= 0.4; // 형광펜 반투명
+      opacity *= 0.4;
     }
 
-    final paint = Paint()
-      ..color = color.withValues(alpha: opacity)
-      ..strokeWidth = stroke.style.width
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round
-      ..style = PaintingStyle.stroke;
+    final baseWidth = stroke.style.width;
+    final penType = stroke.style.penType;
+    final usePressure = _isPressureSensitivePen(penType);
 
-    if (stroke.points.length == 1) {
-      canvas.drawCircle(
-        Offset(stroke.points.first.x, stroke.points.first.y),
-        stroke.style.width / 2,
-        paint..style = PaintingStyle.fill,
-      );
-    } else {
-      final path = Path();
-      path.moveTo(stroke.points.first.x, stroke.points.first.y);
+    final strokeColor = color.withValues(alpha: opacity);
 
-      for (int i = 1; i < stroke.points.length; i++) {
-        path.lineTo(stroke.points[i].x, stroke.points[i].y);
+    if (!usePressure) {
+      // 형광펜: 단일 path
+      final paint = Paint()
+        ..color = strokeColor
+        ..strokeWidth = baseWidth
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..style = PaintingStyle.stroke;
+      if (stroke.points.length == 1) {
+        canvas.drawCircle(
+          Offset(stroke.points.first.x, stroke.points.first.y),
+          baseWidth / 2,
+          paint..style = PaintingStyle.fill,
+        );
+      } else {
+        final path = Path();
+        path.moveTo(stroke.points.first.x, stroke.points.first.y);
+        for (int i = 1; i < stroke.points.length; i++) {
+          path.lineTo(stroke.points[i].x, stroke.points[i].y);
+        }
+        canvas.drawPath(path, paint);
       }
-
-      canvas.drawPath(path, paint);
+      return;
     }
+
+    // perfect_freehand: 부드러운 가변 굵기 (얼룩 없음)
+    final points = stroke.points.map((p) => PointVector(
+      p.x,
+      p.y,
+      p.pressure.clamp(0.0, 1.0),
+    )).toList();
+    _drawStrokeWithFreehand(canvas, points, strokeColor, baseWidth, penType);
   }
 
   void _drawLocalStroke(Canvas canvas, LocalStrokeData stroke, double opacity) {
@@ -2017,46 +2484,44 @@ class _CanvasPainter extends CustomPainter {
     if (stroke.penType == PenType.highlighter) {
       alpha *= 0.4; // 형광펜 반투명
     }
-    final paint = Paint()
-      ..color = stroke.color.withValues(alpha: alpha)
-      ..strokeWidth = stroke.strokeWidth
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round
-      ..style = PaintingStyle.stroke;
 
-    if (stroke.points.length == 1) {
-      canvas.drawCircle(
-        stroke.points.first,
-        stroke.strokeWidth / 2,
-        paint..style = PaintingStyle.fill,
-      );
-    } else {
-      final path = Path();
-      path.moveTo(stroke.points.first.dx, stroke.points.first.dy);
+    final baseWidth = stroke.strokeWidth;
+    final penTypeStr = stroke.penType.name;
+    final usePressure = _isPressureSensitivePen(penTypeStr);
 
-      for (int i = 1; i < stroke.points.length; i++) {
-        path.lineTo(stroke.points[i].dx, stroke.points[i].dy);
+    final strokeColor = stroke.color.withValues(alpha: alpha);
+
+    if (!usePressure) {
+      final paint = Paint()
+        ..color = strokeColor
+        ..strokeWidth = baseWidth
+        ..strokeCap = StrokeCap.round
+        ..strokeJoin = StrokeJoin.round
+        ..style = PaintingStyle.stroke;
+      if (stroke.points.length == 1) {
+        canvas.drawCircle(stroke.points.first.offset, baseWidth / 2, paint..style = PaintingStyle.fill);
+      } else {
+        final path = Path();
+        path.moveTo(stroke.points.first.x, stroke.points.first.y);
+        for (int i = 1; i < stroke.points.length; i++) {
+          path.lineTo(stroke.points[i].x, stroke.points[i].y);
+        }
+        canvas.drawPath(path, paint);
       }
-
-      canvas.drawPath(path, paint);
+      return;
     }
+
+    // perfect_freehand: 부드러운 가변 굵기 (얼룩 없음)
+    final points = stroke.points.map((p) => PointVector(
+      p.x,
+      p.y,
+      p.pressure.clamp(0.0, 1.0),
+    )).toList();
+    _drawStrokeWithFreehand(canvas, points, strokeColor, baseWidth, penTypeStr);
   }
 
   @override
   bool shouldRepaint(covariant _CanvasPainter oldDelegate) {
     return true;
   }
-}
-
-/// 이벤트 단위 이동용 간단한 이벤트 클래스
-class _TimelineEvent {
-  final double x;
-  final double y;
-  final DateTime timestamp;
-
-  _TimelineEvent({
-    required this.x,
-    required this.y,
-    required this.timestamp,
-  });
 }

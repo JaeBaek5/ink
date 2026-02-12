@@ -3,8 +3,12 @@ import 'package:flutter/foundation.dart' show debugPrint;
 
 /// 감사 로그 서비스. append-only: 생성만 허용, 수정/삭제 불가.
 /// 메시지·스트로크·방·친구 등 생성·수정·삭제 이벤트를 audit_logs에 기록.
+/// 고빈도 이벤트(stroke 생성/삭제)는 기본 비활성화 → Firestore write 절감.
 class AuditLogService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+
+  /// true 시 stroke_created / stroke_deleted 건별 로그 기록 (문제 조사 모드)
+  static bool enableStrokeAudit = false;
 
   CollectionReference<Map<String, dynamic>> get _auditLogs =>
       _firestore.collection('audit_logs');
@@ -55,11 +59,15 @@ class AuditLogService {
   Future<void> logRoomLeave(String userId, String roomId) =>
       log(eventType: 'room_leave', collection: 'rooms', documentId: roomId, userId: userId, roomId: roomId);
 
-  Future<void> logStrokeCreated(String userId, String roomId, String strokeId) =>
-      log(eventType: 'stroke_created', collection: 'strokes', documentId: strokeId, userId: userId, roomId: roomId);
+  Future<void> logStrokeCreated(String userId, String roomId, String strokeId) async {
+    if (!enableStrokeAudit) return;
+    await log(eventType: 'stroke_created', collection: 'strokes', documentId: strokeId, userId: userId, roomId: roomId);
+  }
 
-  Future<void> logStrokeDeleted(String userId, String roomId, String strokeId) =>
-      log(eventType: 'stroke_deleted', collection: 'strokes', documentId: strokeId, userId: userId, roomId: roomId);
+  Future<void> logStrokeDeleted(String userId, String roomId, String strokeId) async {
+    if (!enableStrokeAudit) return;
+    await log(eventType: 'stroke_deleted', collection: 'strokes', documentId: strokeId, userId: userId, roomId: roomId);
+  }
 
   Future<void> logTextCreated(String userId, String roomId, String textId) =>
       log(eventType: 'text_created', collection: 'texts', documentId: textId, userId: userId, roomId: roomId);

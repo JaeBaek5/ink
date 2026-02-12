@@ -1,13 +1,26 @@
+import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../core/utils/firestore_retry.dart';
 import '../models/room_model.dart';
 import '../models/user_model.dart';
 import 'audit_log_service.dart';
 
+/// 방별 마지막 이벤트 디바운스용 (2~5초에 1회만 Firestore write)
+class _PendingLastEvent {
+  String eventType;
+  String? preview;
+  String? url;
+  _PendingLastEvent({required this.eventType, this.preview, this.url});
+}
+
 /// 채팅방 서비스
 class RoomService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final AuditLogService _auditLog = AuditLogService();
+
+  static const Duration updateLastEventDebounce = Duration(seconds: 3);
+  final Map<String, _PendingLastEvent> _pendingLastEvent = {};
+  final Map<String, Timer> _pendingLastEventTimers = {};
 
   CollectionReference<Map<String, dynamic>> get _roomsCollection =>
       _firestore.collection('rooms');
@@ -308,22 +321,37 @@ class RoomService {
     }
   }
 
-  /// 마지막 이벤트 업데이트 (방이 서버에서 삭제된 경우 not-found는 무시)
+  /// 마지막 이벤트 업데이트 (디바운스: 3초에 1회만 Firestore write로 요금 절감)
   /// [url] 이미지/영상 썸네일 등 미리보기용 URL (선택)
-  Future<void> updateLastEvent(
+  void updateLastEvent(
     String roomId, {
     required String eventType,
     String? preview,
     String? url,
-  }) async {
+  }) {
+    _pendingLastEvent[roomId] = _PendingLastEvent(
+      eventType: eventType,
+      preview: preview,
+      url: url,
+    );
+    _pendingLastEventTimers[roomId]?.cancel();
+    _pendingLastEventTimers[roomId] = Timer(updateLastEventDebounce, () {
+      _pendingLastEventTimers.remove(roomId);
+      final pending = _pendingLastEvent.remove(roomId);
+      if (pending == null) return;
+      _flushLastEvent(roomId, pending);
+    });
+  }
+
+  Future<void> _flushLastEvent(String roomId, _PendingLastEvent pending) async {
     try {
       await retryFirestore(() async {
         final updates = <String, dynamic>{
           'lastActivityAt': FieldValue.serverTimestamp(),
-          'lastEventType': eventType,
-          'lastEventPreview': preview,
+          'lastEventType': pending.eventType,
+          'lastEventPreview': pending.preview,
         };
-        if (url != null) updates['lastEventUrl'] = url;
+        if (pending.url != null) updates['lastEventUrl'] = pending.url;
         await _roomsCollection.doc(roomId).update(updates);
       });
     } on FirebaseException catch (e) {
@@ -338,6 +366,37 @@ class RoomService {
       final doc = await _usersCollection.doc(userId).get();
       if (!doc.exists) return null;
       return UserModel.fromFirestore(doc);
+    });
+  }
+
+  /// 캔버스 초기화 (방장 전용). 스트로크·도형·텍스트·미디어 모두 소프트 삭제.
+  Future<void> resetCanvas(String roomId, String userId) async {
+    await retryFirestore(() async {
+      const batchLimit = 400;
+      final roomRef = _roomsCollection.doc(roomId);
+
+      for (final subcollection in ['strokes', 'shapes', 'texts', 'media']) {
+        DocumentSnapshot? lastDoc;
+        while (true) {
+          var query = roomRef.collection(subcollection).limit(batchLimit);
+          if (lastDoc != null) {
+            query = query.startAfterDocument(lastDoc);
+          }
+          final snapshot = await query.get();
+          if (snapshot.docs.isEmpty) break;
+
+          final batch = _firestore.batch();
+          for (final doc in snapshot.docs) {
+            batch.update(doc.reference, {
+              'isDeleted': true,
+              'deletedAt': FieldValue.serverTimestamp(),
+              'deletedBy': userId,
+            });
+          }
+          await batch.commit();
+          lastDoc = snapshot.docs.last;
+        }
+      }
     });
   }
 

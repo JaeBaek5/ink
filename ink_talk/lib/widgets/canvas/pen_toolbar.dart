@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:material_symbols_icons/symbols.dart';
 import '../../core/constants/app_colors.dart';
 import '../../models/shape_model.dart';
 import '../../screens/canvas/canvas_controller.dart';
 
-/// 펜 툴바 (상단 중앙)
+/// 펜 툴바 (상단 중앙).
+/// 자유형 선택, 사각 선택, 영상, 사진, PDF, 텍스트, 손글씨(펜) 모두 항상 선택·탭 가능.
 class PenToolbar extends StatelessWidget {
   final CanvasController controller;
   /// 방장 설정: false면 도형 버튼 비활성
@@ -56,6 +58,9 @@ class PenToolbar extends StatelessWidget {
           ),
           // 지우개 선택 시: 모드 + 크기 바
           if (isEraserSelected) _buildEraserSubBar(context),
+          // 손글씨·미디어·텍스트 선택 시: 삭제·복사·선택 해제
+          if (controller.hasSelectedStrokesOrMediaOrText && controller.selectionTool != SelectionTool.none)
+            _buildStrokeSelectionBar(context),
         ],
       ),
     );
@@ -172,7 +177,7 @@ class PenToolbar extends StatelessWidget {
           const SizedBox(height: 6),
           Row(
             children: [
-              Icon(Icons.auto_fix_off, size: 18, color: AppColors.mutedGray),
+              Icon(Symbols.ink_eraser, size: 18, color: AppColors.mutedGray),
               const SizedBox(width: 8),
               Expanded(
                 child: SliderTheme(
@@ -200,6 +205,48 @@ class PenToolbar extends StatelessWidget {
     );
   }
 
+  /// 손글씨·미디어·텍스트 선택 시: 삭제·복사·선택 해제 버튼
+  Widget _buildStrokeSelectionBar(BuildContext context) {
+    final totalCount = controller.selectedStrokeIds.length +
+        controller.selectedMediaIds.length +
+        controller.selectedTextIds.length;
+    return Container(
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 8),
+      decoration: BoxDecoration(
+        color: AppColors.gold.withValues(alpha: 0.08),
+        border: Border(top: BorderSide(color: AppColors.border)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            '$totalCount개 선택',
+            style: const TextStyle(fontSize: 12, color: AppColors.mutedGray),
+          ),
+          const SizedBox(width: 16),
+          TextButton.icon(
+            icon: const Icon(Icons.delete_outline, size: 18),
+            label: const Text('삭제'),
+            onPressed: () => controller.deleteSelection(),
+            style: TextButton.styleFrom(foregroundColor: AppColors.ink),
+          ),
+          TextButton.icon(
+            icon: const Icon(Icons.copy, size: 18),
+            label: const Text('복사'),
+            onPressed: () => controller.copySelection(),
+            style: TextButton.styleFrom(foregroundColor: AppColors.ink),
+          ),
+          TextButton.icon(
+            icon: const Icon(Icons.close, size: 18),
+            label: const Text('선택 해제'),
+            onPressed: controller.clearStrokeSelection,
+            style: TextButton.styleFrom(foregroundColor: AppColors.ink),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildDivider() {
     return Container(
       width: 1,
@@ -209,15 +256,15 @@ class PenToolbar extends StatelessWidget {
     );
   }
 
-  /// 펜 슬롯 (문서 스펙: 펜·연필·만년필·브러시·형광펜·지우개)
+  /// 펜 슬롯 (손글씨·펜·연필·만년필·브러시·형광펜·지우개 — 툴바에서 모두 선택 가능)
   Widget _buildPenSlots(BuildContext context) {
     return Row(
       children: [
-        _buildPenButton(PenType.pen1, Icons.edit, '펜', controller.currentPen == PenType.pen1),
-        _buildPenButton(PenType.pen2, Icons.create, '연필', controller.currentPen == PenType.pen2),
-        _buildPenButton(PenType.fountain, Icons.brush_outlined, '만년필', controller.currentPen == PenType.fountain),
-        _buildPenButton(PenType.brush, Icons.brush, '브러시', controller.currentPen == PenType.brush),
-        _buildPenButton(PenType.highlighter, Icons.highlight, '형광펜', controller.currentPen == PenType.highlighter),
+        _buildPenButton(PenType.pen1, Symbols.stylus_pen, '손글씨 · 펜', controller.currentPen == PenType.pen1),
+        _buildPenButton(PenType.pen2, Symbols.stylus_pencil, '연필', controller.currentPen == PenType.pen2),
+        _buildPenButton(PenType.fountain, Symbols.stylus_fountain_pen, '만년필', controller.currentPen == PenType.fountain),
+        _buildPenButton(PenType.brush, Symbols.stylus_brush, '브러시', controller.currentPen == PenType.brush),
+        _buildPenButton(PenType.highlighter, Symbols.ink_highlighter, '형광펜', controller.currentPen == PenType.highlighter),
         _buildEraserButton(context),
       ],
     );
@@ -265,7 +312,7 @@ class PenToolbar extends StatelessWidget {
             borderRadius: BorderRadius.circular(8),
           ),
           child: Icon(
-            Icons.auto_fix_off,
+            Symbols.ink_eraser,
             size: 20,
             color: isSelected ? AppColors.gold : AppColors.ink,
           ),
@@ -583,11 +630,20 @@ class PenToolbar extends StatelessWidget {
             borderRadius: BorderRadius.circular(8),
             child: Container(
               padding: const EdgeInsets.all(8),
-              child: const Icon(
-                Icons.videocam_outlined,
-                size: 20,
-                color: AppColors.ink,
-              ),
+              child: controller.isUploading
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: AppColors.gold,
+                      ),
+                    )
+                  : const Icon(
+                      Icons.videocam_outlined,
+                      size: 20,
+                      color: AppColors.ink,
+                    ),
             ),
           ),
         ),
@@ -599,11 +655,20 @@ class PenToolbar extends StatelessWidget {
             borderRadius: BorderRadius.circular(8),
             child: Container(
               padding: const EdgeInsets.all(8),
-              child: const Icon(
-                Icons.picture_as_pdf_outlined,
-                size: 20,
-                color: AppColors.ink,
-              ),
+              child: controller.isUploading
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: AppColors.gold,
+                      ),
+                    )
+                  : const Icon(
+                      Icons.picture_as_pdf_outlined,
+                      size: 20,
+                      color: AppColors.ink,
+                    ),
             ),
           ),
         ),
@@ -611,10 +676,11 @@ class PenToolbar extends StatelessWidget {
     );
   }
 
-  /// 텍스트 버튼
+  /// 텍스트 버튼 + 글자 크기 (위치 지정·빠른 입력 둘 다 적용)
   Widget _buildTextButtons() {
     final isTextMode = controller.inputMode == InputMode.text;
     final isQuickTextMode = controller.inputMode == InputMode.quickText;
+    const fontSizes = [12.0, 14.0, 16.0, 18.0, 20.0, 24.0, 28.0, 32.0, 40.0, 48.0, 56.0, 64.0, 72.0, 80.0, 96.0, 128.0];
 
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -669,6 +735,38 @@ class PenToolbar extends StatelessWidget {
                 size: 20,
                 color: isQuickTextMode ? AppColors.gold : AppColors.ink,
               ),
+            ),
+          ),
+        ),
+        // 글자 크기 (위치 지정·빠른 입력 공통)
+        const SizedBox(width: 4),
+        Tooltip(
+          message: '글자 크기',
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+            decoration: BoxDecoration(
+              color: (isTextMode || isQuickTextMode)
+                  ? AppColors.gold.withValues(alpha: 0.15)
+                  : null,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: DropdownButton<double>(
+              value: fontSizes.contains(controller.textFontSize)
+                  ? controller.textFontSize
+                  : 16.0,
+              isDense: true,
+              underline: const SizedBox(),
+              icon: Icon(Icons.arrow_drop_down, size: 20, color: AppColors.ink),
+              style: const TextStyle(fontSize: 13, color: AppColors.ink),
+              items: fontSizes
+                  .map((v) => DropdownMenuItem(
+                        value: v,
+                        child: Text('${v.toInt()}pt'),
+                      ))
+                  .toList(),
+              onChanged: (v) {
+                if (v != null) controller.setTextFontSize(v);
+              },
             ),
           ),
         ),
