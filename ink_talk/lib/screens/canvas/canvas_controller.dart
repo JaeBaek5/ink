@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../models/message_model.dart';
@@ -384,7 +386,7 @@ class CanvasController extends ChangeNotifier {
   };
 
   // 색상 슬롯 (6개)
-  List<Color> _colorSlots = [
+  final List<Color> _colorSlots = [
     Colors.black,
     const Color(0xFF1E88E5),
     const Color(0xFFE53935),
@@ -438,6 +440,16 @@ class CanvasController extends ChangeNotifier {
   // 서버 스트로크 (Firestore에서 가져온 것)
   List<StrokeModel> _serverStrokes = [];
   List<StrokeModel> get serverStrokes => _serverStrokes;
+  /// 이벤트 바 스크롤 → 끝 근접 시 추가 로드용 커서
+  DocumentSnapshot? _oldestStrokeDoc;
+  DocumentSnapshot? _newestStrokeDoc;
+  DocumentSnapshot? _oldestTextDoc;
+  DocumentSnapshot? _newestTextDoc;
+  DocumentSnapshot? _oldestMediaDoc;
+  DocumentSnapshot? _newestMediaDoc;
+  bool _isLoadingMoreOlder = false;
+  bool _isLoadingMoreNewer = false;
+  bool get isLoadingMoreEvents => _isLoadingMoreOlder || _isLoadingMoreNewer;
 
   // 현재 그리는 중인 스트로크
   LocalStrokeData? _currentStroke;
@@ -538,7 +550,7 @@ class CanvasController extends ChangeNotifier {
       _canvasScale = saved.scale.clamp(0.1, 5.0);
     }
 
-    List<StrokeModel> _applyStrokeFilter(List<StrokeModel> strokes) {
+    List<StrokeModel> applyStrokeFilter(List<StrokeModel> strokes) {
       if (_blockedUserId == null || _blockedAt == null) return strokes;
       return strokes
           .where((s) =>
@@ -547,7 +559,7 @@ class CanvasController extends ChangeNotifier {
           .toList();
     }
 
-    List<MessageModel> _applyTextFilter(List<MessageModel> texts) {
+    List<MessageModel> applyTextFilter(List<MessageModel> texts) {
       if (_blockedUserId == null || _blockedAt == null) return texts;
       return texts
           .where((m) =>
@@ -557,24 +569,36 @@ class CanvasController extends ChangeNotifier {
     }
 
     // Firestore 1회 로드 (실시간은 RTDB로 전환하여 Read 비용 절감)
+    // 리얼타임 없을 때·테스트 시 Read 한도 절약: 디버그 모드에서는 초기 로드량 축소
     _strokesSubscription?.cancel();
     _textsSubscription?.cancel();
     _shapesSubscription?.cancel();
     _mediaSubscription?.cancel();
     _rtdbSubscription?.cancel();
 
+    final reduceReads = kDebugMode;
+    final strokeLimit = reduceReads ? 40 : StrokeService.initialStrokePageSize;
+    final textLimit = reduceReads ? 30 : TextService.initialTextPageSize;
+    final mediaLimit = reduceReads ? 30 : MediaService.initialMediaPageSize;
+
     Future(() async {
-      final strokes = await _strokeService.getStrokes(roomId);
-      final texts = await _textService.getTexts(roomId);
+      final strokePage = await _strokeService.getStrokesPage(roomId, limit: strokeLimit);
+      final textPage = await _textService.getTextsPage(roomId, limit: textLimit);
       final shapes = await _shapeService.getShapes(roomId);
-      final media = await _mediaService.getMedia(roomId);
+      final mediaPage = await _mediaService.getMediaPage(roomId, limit: mediaLimit);
       if (_disposed) return;
-      _serverStrokes = _applyStrokeFilter(strokes);
-      _serverTexts = _applyTextFilter(texts);
+      _serverStrokes = applyStrokeFilter(strokePage.list);
+      _serverTexts = applyTextFilter(textPage.list);
       _serverShapes = shapes;
-      _serverMedia = media;
+      _serverMedia = mediaPage.list;
+      _oldestStrokeDoc = strokePage.firstDoc;
+      _newestStrokeDoc = strokePage.lastDoc;
+      _oldestTextDoc = textPage.firstDoc;
+      _newestTextDoc = textPage.lastDoc;
+      _oldestMediaDoc = mediaPage.firstDoc;
+      _newestMediaDoc = mediaPage.lastDoc;
       _mediaCropRects.clear();
-      for (final m in media) {
+      for (final m in _serverMedia) {
         if (m.cropRect != null) _mediaCropRects[m.id] = m.cropRect!;
       }
       _rtdbJoinTime = DateTime.now().millisecondsSinceEpoch - 10000;
@@ -591,6 +615,10 @@ class CanvasController extends ChangeNotifier {
         },
         onError: (err) => debugPrint('RTDB 스트림 오류: $err'),
       );
+      final savedPt = await SettingsService().getTextFontSize();
+      if (savedPt != null && !_disposed) {
+        _textFontSize = savedPt.clamp(12.0, 128.0);
+      }
       _notifyIfNotDisposed();
     });
     Future.microtask(() {
@@ -599,6 +627,139 @@ class CanvasController extends ChangeNotifier {
     Future.delayed(const Duration(milliseconds: 300), () {
       if (!_disposed) _notifyIfNotDisposed();
     });
+  }
+
+  /// 이벤트 바 스크롤이 위(과거) 끝에 근접할 때 호출 → 더 과거 항목 추가 로드
+  Future<void> loadMoreEventsOlder() async {
+    if (_roomId == null || _isLoadingMoreOlder) return;
+    if (_oldestStrokeDoc == null && _oldestTextDoc == null && _oldestMediaDoc == null) return;
+    _isLoadingMoreOlder = true;
+    _notifyIfNotDisposed();
+    try {
+      final List<StrokeModel> olderStrokes = [];
+      DocumentSnapshot? newOldestStroke;
+      if (_oldestStrokeDoc != null) {
+        final r = await _strokeService.getStrokesOlder(_roomId!, _oldestStrokeDoc!);
+        if (r.list.isNotEmpty) {
+          olderStrokes.addAll(r.list);
+          newOldestStroke = r.firstDoc;
+        }
+      }
+      final List<MessageModel> olderTexts = [];
+      DocumentSnapshot? newOldestText;
+      if (_oldestTextDoc != null) {
+        final r = await _textService.getTextsOlder(_roomId!, _oldestTextDoc!);
+        if (r.list.isNotEmpty) {
+          olderTexts.addAll(r.list);
+          newOldestText = r.firstDoc;
+        }
+      }
+      final List<MediaModel> olderMedia = [];
+      DocumentSnapshot? newOldestMedia;
+      if (_oldestMediaDoc != null) {
+        final r = await _mediaService.getMediaOlder(_roomId!, _oldestMediaDoc!);
+        if (r.list.isNotEmpty) {
+          olderMedia.addAll(r.list);
+          newOldestMedia = r.firstDoc;
+        }
+      }
+      if (_disposed) return;
+      if (olderStrokes.isNotEmpty) {
+        final ids = _serverStrokes.map((s) => s.id).toSet();
+        final toPrepend = olderStrokes.where((s) => !ids.contains(s.id)).toList();
+        _serverStrokes = [...toPrepend, ..._serverStrokes];
+        if (newOldestStroke != null) _oldestStrokeDoc = newOldestStroke;
+      }
+      if (olderTexts.isNotEmpty) {
+        final ids = _serverTexts.map((t) => t.id).toSet();
+        final toPrepend = olderTexts.where((t) => !ids.contains(t.id)).toList();
+        _serverTexts = [...toPrepend, ..._serverTexts];
+        _serverTexts.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+        if (newOldestText != null) _oldestTextDoc = newOldestText;
+      }
+      if (olderMedia.isNotEmpty) {
+        final ids = _serverMedia.map((m) => m.id).toSet();
+        final toPrepend = olderMedia.where((m) => !ids.contains(m.id)).toList();
+        _serverMedia = [...toPrepend, ..._serverMedia];
+        _serverMedia.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+        if (newOldestMedia != null) _oldestMediaDoc = newOldestMedia;
+      }
+    } catch (e) {
+      debugPrint('loadMoreEventsOlder 오류: $e');
+    } finally {
+      if (!_disposed) {
+        _isLoadingMoreOlder = false;
+        _notifyIfNotDisposed();
+      }
+    }
+  }
+
+  /// 이벤트 바 스크롤이 아래(최신) 끝에 근접할 때 호출 → 더 최신 항목 추가 로드
+  Future<void> loadMoreEventsNewer() async {
+    if (_roomId == null || _isLoadingMoreNewer) return;
+    if (_newestStrokeDoc == null && _newestTextDoc == null && _newestMediaDoc == null) return;
+    _isLoadingMoreNewer = true;
+    _notifyIfNotDisposed();
+    try {
+      final List<StrokeModel> newerStrokes = [];
+      DocumentSnapshot? newNewestStroke;
+      if (_newestStrokeDoc != null) {
+        final r = await _strokeService.getStrokesPage(_roomId!,
+            startAfter: _newestStrokeDoc, limit: StrokeService.loadMoreStrokePageSize);
+        if (r.list.isNotEmpty) {
+          newerStrokes.addAll(r.list);
+          newNewestStroke = r.lastDoc;
+        }
+      }
+      final List<MessageModel> newerTexts = [];
+      DocumentSnapshot? newNewestText;
+      if (_newestTextDoc != null) {
+        final r = await _textService.getTextsPage(_roomId!,
+            startAfter: _newestTextDoc, limit: TextService.loadMoreTextPageSize);
+        if (r.list.isNotEmpty) {
+          newerTexts.addAll(r.list);
+          newNewestText = r.lastDoc;
+        }
+      }
+      final List<MediaModel> newerMedia = [];
+      DocumentSnapshot? newNewestMedia;
+      if (_newestMediaDoc != null) {
+        final r = await _mediaService.getMediaPage(_roomId!,
+            startAfter: _newestMediaDoc, limit: MediaService.loadMoreMediaPageSize);
+        if (r.list.isNotEmpty) {
+          newerMedia.addAll(r.list);
+          newNewestMedia = r.lastDoc;
+        }
+      }
+      if (_disposed) return;
+      if (newerStrokes.isNotEmpty) {
+        final ids = _serverStrokes.map((s) => s.id).toSet();
+        final toAppend = newerStrokes.where((s) => !ids.contains(s.id)).toList();
+        _serverStrokes = [..._serverStrokes, ...toAppend];
+        if (newNewestStroke != null) _newestStrokeDoc = newNewestStroke;
+      }
+      if (newerTexts.isNotEmpty) {
+        final ids = _serverTexts.map((t) => t.id).toSet();
+        final toAppend = newerTexts.where((t) => !ids.contains(t.id)).toList();
+        _serverTexts = [..._serverTexts, ...toAppend];
+        _serverTexts.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+        if (newNewestText != null) _newestTextDoc = newNewestText;
+      }
+      if (newerMedia.isNotEmpty) {
+        final ids = _serverMedia.map((m) => m.id).toSet();
+        final toAppend = newerMedia.where((m) => !ids.contains(m.id)).toList();
+        _serverMedia = [..._serverMedia, ...toAppend];
+        _serverMedia.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+        if (newNewestMedia != null) _newestMediaDoc = newNewestMedia;
+      }
+    } catch (e) {
+      debugPrint('loadMoreEventsNewer 오류: $e');
+    } finally {
+      if (!_disposed) {
+        _isLoadingMoreNewer = false;
+        _notifyIfNotDisposed();
+      }
+    }
   }
 
   void _applyRtdbEvent(RoomDeltaEvent e) {
@@ -720,12 +881,13 @@ class CanvasController extends ChangeNotifier {
     _notifyIfNotDisposed();
   }
 
-  /// 툴바/위치 지정/빠른 입력 공통 텍스트 크기(pt)
+  /// 툴바/위치 지정/빠른 입력 공통 텍스트 크기(pt). 방 나갔다 와도 마지막 선택값 유지.
   double _textFontSize = 16.0;
   double get textFontSize => _textFontSize;
   void setTextFontSize(double pt) {
     if (_textFontSize == pt) return;
     _textFontSize = pt;
+    SettingsService().setTextFontSize(pt);
     _notifyIfNotDisposed();
   }
 
@@ -2070,7 +2232,7 @@ class CanvasController extends ChangeNotifier {
     }
 
     final ts = timestamp ?? DateTime.now().millisecondsSinceEpoch;
-    final id = '${_userId}_${ts}';
+    final id = '${_userId}_$ts';
     _currentStroke = LocalStrokeData(
       id: id,
       senderId: _userId!,
@@ -2145,6 +2307,22 @@ class CanvasController extends ChangeNotifier {
         _roomService.updateLastEvent(_roomId!, eventType: 'stroke', preview: '손글씨');
         final payload = strokeModel.toRtdbPayload()..['id'] = firestoreId;
         _rtdbRoom.pushEvent(_roomId!, 'stroke_delta', 'add', payload);
+        // 이벤트 바에 즉시 반영 (RTDB 수신 전에도 표시)
+        final serverModel = StrokeModel(
+          id: firestoreId,
+          roomId: strokeModel.roomId,
+          senderId: strokeModel.senderId,
+          points: strokeModel.points,
+          style: strokeModel.style,
+          createdAt: strokeModel.createdAt,
+          isConfirmed: strokeModel.isConfirmed,
+          isDeleted: strokeModel.isDeleted,
+        );
+        final ids = _serverStrokes.map((s) => s.id).toSet();
+        if (!ids.contains(firestoreId)) {
+          _serverStrokes = [..._serverStrokes, serverModel];
+          _serverStrokes.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+        }
       }
 
       _confirmTimer?.cancel();
@@ -2179,6 +2357,21 @@ class CanvasController extends ChangeNotifier {
           _roomService.updateLastEvent(_roomId!, eventType: 'stroke', preview: '손글씨');
           final payload = item.model.toRtdbPayload()..['id'] = firestoreId;
           _rtdbRoom.pushEvent(_roomId!, 'stroke_delta', 'add', payload);
+          final serverModel = StrokeModel(
+            id: firestoreId,
+            roomId: item.model.roomId,
+            senderId: item.model.senderId,
+            points: item.model.points,
+            style: item.model.style,
+            createdAt: item.model.createdAt,
+            isConfirmed: item.model.isConfirmed,
+            isDeleted: item.model.isDeleted,
+          );
+          final ids = _serverStrokes.map((s) => s.id).toSet();
+          if (!ids.contains(firestoreId)) {
+            _serverStrokes = [..._serverStrokes, serverModel];
+            _serverStrokes.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+          }
         }
         _confirmTimer?.cancel();
         _confirmTimer = Timer(_confirmDelay, () {
