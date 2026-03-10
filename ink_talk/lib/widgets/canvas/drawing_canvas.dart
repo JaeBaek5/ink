@@ -115,6 +115,20 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     return isDrawingTool;
   }
 
+  /// 네비게이션 바(이벤트 바) 영역이면 true. 해당 구역에서는 손글씨가 써지지 않도록 함.
+  bool _isInNavBarArea(Offset localPosition, Size viewportSize) {
+    const barWidth = 24.0;
+    const rightMargin = 8.0;
+    const topMargin = 60.0;
+    const bottomMargin = 24.0;
+    final left = viewportSize.width - rightMargin - barWidth;
+    final right = viewportSize.width - rightMargin;
+    return localPosition.dx >= left &&
+        localPosition.dx <= right &&
+        localPosition.dy >= topMargin &&
+        localPosition.dy <= viewportSize.height - bottomMargin;
+  }
+
   @override
   Widget build(BuildContext context) {
     return MouseRegion(
@@ -404,10 +418,12 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
                           strokes: widget.controller.serverStrokes,
                           texts: widget.controller.serverTexts,
                           media: widget.controller.serverMedia,
-                          onJump: (position) {
+                          onJump: (position, segmentIndex) {
                             widget.controller.jumpToPosition(position, viewportSize);
+                            setState(() => _currentEventIndex = segmentIndex);
                           },
                           logPublic: widget.logPublic,
+                          getSenderDisplayName: (id) => _displayNameForSender(id ?? ''),
                         ),
                       ),
                       const SizedBox(height: 4),
@@ -1431,6 +1447,10 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
         (isShapeMode && event.kind == PointerDeviceKind.touch);
 
     if (isPointerForInput) {
+      final viewportSize = widget.controller.viewportSize;
+      if (viewportSize != null && _isInNavBarArea(event.localPosition, viewportSize)) {
+        return;
+      }
       final localPoint = _transformPoint(event.localPosition);
       final forceEraser = event.kind == PointerDeviceKind.invertedStylus ||
           (event.buttons & kSecondaryStylusButton) != 0 ||
@@ -1479,12 +1499,18 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
         (isShapeMode && _currentInputKind == PointerDeviceKind.touch);
 
     if (isPointerForInput) {
+      final viewportSize = widget.controller.viewportSize;
+      final inNavBar = viewportSize != null && _isInNavBarArea(event.localPosition, viewportSize);
       final localPoint = _transformPoint(event.localPosition);
       final forceEraser = _currentInputKind == PointerDeviceKind.invertedStylus ||
           (event.buttons & kSecondaryStylusButton) != 0 ||
           (event.buttons & kSecondaryMouseButton) != 0;
       if (widget.controller.currentPen == PenType.eraser || forceEraser) {
         setState(() => _eraserHoverPosition = event.localPosition);
+      }
+
+      if (inNavBar && widget.controller.currentStroke != null) {
+        return;
       }
 
       if (widget.controller.isMovingSelection) {

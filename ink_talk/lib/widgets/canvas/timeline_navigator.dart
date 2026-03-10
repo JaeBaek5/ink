@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import '../../core/constants/app_colors.dart';
@@ -83,10 +84,13 @@ class TimelineNavigator extends StatefulWidget {
   final List<StrokeModel> strokes;
   final List<MessageModel> texts;
   final List<MediaModel> media;
-  final Function(Offset position) onJump;
+  /// (캔버스 좌표, 선택된 세그먼트 인덱스) 전달. 아래/위 버튼이 이 인덱스 기준 이전·다음으로 동작.
+  final void Function(Offset position, int segmentIndex) onJump;
   final double canvasHeight;
   /// 방장 설정: false면 로그(타임라인) 비공개로 바 표시만
   final bool logPublic;
+  /// 세그먼트 작성자 표시명 조회 (senderId → 표시 이름). null이면 작성자 미표시.
+  final String? Function(String? senderId)? getSenderDisplayName;
 
   const TimelineNavigator({
     super.key,
@@ -96,6 +100,7 @@ class TimelineNavigator extends StatefulWidget {
     required this.onJump,
     this.canvasHeight = 5000,
     this.logPublic = true,
+    this.getSenderDisplayName,
   });
 
   @override
@@ -189,7 +194,12 @@ class _TimelineNavigatorState extends State<TimelineNavigator> {
   double _dragPosition = 0;
   bool _isDragging = false;
   TimelineSegment? _hoveredSegment;
+  /// 펜/마우스 호버 시 커서 위치 (바 내부 좌표). 객체 미리보기 카드 표시용.
+  Offset? _hoverPosition;
   double _barHeight = 200;
+  /// 펜이 멀어져 호버 이벤트가 끊겼을 때 미리보기 자동 숨김용
+  Timer? _hoverStaleTimer;
+  static const _hoverStaleDelay = Duration(milliseconds: 350);
 
   /// 3초 이상 손글씨 미입력 기준으로 스트로크를 문장 단위 세그먼트로 그룹화
   static const _pauseThresholdMs = 3000;
@@ -328,7 +338,48 @@ class _TimelineNavigatorState extends State<TimelineNavigator> {
       child: Column(
         children: [
           Expanded(
-            child: GestureDetector(
+            child: Listener(
+              behavior: HitTestBehavior.translucent,
+              onPointerHover: (event) {
+                final h = _barHeight;
+                final segs = _segments;
+                if (h <= 0 || segs.isEmpty) {
+                  _clearHoverState();
+                  return;
+                }
+                final dx = event.localPosition.dx;
+                final dy = event.localPosition.dy;
+                final inBar = dx >= 0 && dx <= 24 && dy >= 0 && dy <= h;
+                if (inBar) {
+                  final seg = _segmentAtPosition(dy, h, segs);
+                  if (seg != _hoveredSegment || _hoverPosition != event.localPosition) {
+                    setState(() {
+                      _hoveredSegment = seg;
+                      _hoverPosition = event.localPosition;
+                    });
+                  }
+                  _hoverStaleTimer?.cancel();
+                  _hoverStaleTimer = Timer(_hoverStaleDelay, () {
+                    if (mounted) _clearHoverState();
+                  });
+                } else {
+                  _clearHoverState();
+                }
+              },
+              onPointerDown: (_) {
+                _clearHoverState();
+              },
+              onPointerUp: (_) {
+                _clearHoverState();
+              },
+              onPointerCancel: (_) {
+                _clearHoverState();
+              },
+              child: MouseRegion(
+                onExit: (_) {
+                  _clearHoverState();
+                },
+                child: GestureDetector(
                 onVerticalDragStart: _onDragStart,
                 onVerticalDragUpdate: _onDragUpdate,
                 onVerticalDragEnd: _onDragEnd,
@@ -370,6 +421,14 @@ class _TimelineNavigatorState extends State<TimelineNavigator> {
                               child: _buildSegmentPreviewCard(previewSeg),
                             ),
 
+                          // 펜/마우스 호버 시 객체 미리보기 카드 (손(터치) 드래그와 동일하게 커서 위치에 표시)
+                          if (!_isDragging && _hoveredSegment != null && _hoverPosition != null)
+                            Positioned(
+                              left: -132,
+                              top: (_hoverPosition!.dy - 28).clamp(0.0, (height - 56).clamp(0.0, double.infinity)),
+                              child: _buildSegmentPreviewCard(_hoveredSegment!),
+                            ),
+
                           // 드래그 핸들
                           if (_isDragging)
                             Positioned(
@@ -396,9 +455,28 @@ class _TimelineNavigatorState extends State<TimelineNavigator> {
                 ),
               ),
             ),
+            ),
+          ),
         ],
       ),
     );
+  }
+
+  void _clearHoverState() {
+    _hoverStaleTimer?.cancel();
+    _hoverStaleTimer = null;
+    if (_hoveredSegment != null || _hoverPosition != null) {
+      setState(() {
+        _hoveredSegment = null;
+        _hoverPosition = null;
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _hoverStaleTimer?.cancel();
+    super.dispose();
   }
 
   /// 마커 배치와 미리보기/점프에서 공통 사용: 세그먼트별 Y 위치(픽셀). 이벤트 간격 동일하게 균등 배치.
@@ -447,19 +525,9 @@ class _TimelineNavigatorState extends State<TimelineNavigator> {
       child: MouseRegion(
         onEnter: (_) => setState(() => _hoveredSegment = segment),
         onExit: (_) => setState(() => _hoveredSegment = null),
-        child: Tooltip(
-          message: _segmentTooltip(segment),
-          child: _buildSegmentMarker(segment),
-        ),
+        child: _buildSegmentMarker(segment),
       ),
     );
-  }
-
-  String _segmentTooltip(TimelineSegment seg) {
-    final name = seg.type == TimelineEventType.stroke && seg.strokeIds.length > 1
-        ? '손글씨 (${seg.strokeIds.length}획)'
-        : _getEventTypeName(seg.type);
-    return '$name - ${_formatDateTime(seg.startTime)}';
   }
 
   Widget _buildSegmentMarker(TimelineSegment segment) {
@@ -621,6 +689,17 @@ class _TimelineNavigatorState extends State<TimelineNavigator> {
                 child: previewContent,
               ),
             ),
+            if (widget.getSenderDisplayName != null && segment.senderId != null) ...[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(6, 4, 6, 0),
+                child: Text(
+                  widget.getSenderDisplayName!(segment.senderId) ?? '알 수 없음',
+                  style: const TextStyle(fontSize: 10, color: AppColors.ink, fontWeight: FontWeight.w500),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
               child: Text(
@@ -832,7 +911,18 @@ class _TimelineNavigatorState extends State<TimelineNavigator> {
   void _jumpToSegment(TimelineSegment segment) {
     final cx = segment.centerX ?? segment.x;
     final cy = segment.centerY ?? segment.y;
-    widget.onJump(Offset(cx, cy));
+    final segments = _segments;
+    var index = 0;
+    for (var i = 0; i < segments.length; i++) {
+      if (segments[i].startTime == segment.startTime &&
+          segments[i].endTime == segment.endTime &&
+          segments[i].type == segment.type) {
+        index = i;
+        break;
+      }
+    }
+    widget.onJump(Offset(cx, cy), index);
+    _clearHoverState();
   }
 }
 

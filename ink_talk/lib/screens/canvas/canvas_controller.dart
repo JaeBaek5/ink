@@ -591,6 +591,24 @@ class CanvasController extends ChangeNotifier {
         },
         onError: (err) => debugPrint('RTDB 스트림 오류: $err'),
       );
+      // 손글씨 실시간 보조: Firestore 스트림으로 RTDB에서 누락된 새 스트로크 반영
+      _strokesSubscription = _strokeService.getStrokesStream(roomId).listen((firestoreStrokes) {
+        if (_disposed) return;
+        final filtered = _applyStrokeFilter(firestoreStrokes);
+        final existingIds = _serverStrokes.map((s) => s.id).toSet();
+        var merged = List<StrokeModel>.from(_serverStrokes);
+        for (final s in filtered) {
+          if (!existingIds.contains(s.id)) {
+            merged.add(s);
+            existingIds.add(s.id);
+          }
+        }
+        if (merged.length != _serverStrokes.length) {
+          merged.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+          _serverStrokes = merged;
+          _notifyIfNotDisposed();
+        }
+      });
       _notifyIfNotDisposed();
     });
     Future.microtask(() {
@@ -638,7 +656,13 @@ class CanvasController extends ChangeNotifier {
               _serverStrokes.sort((a, b) => a.createdAt.compareTo(b.createdAt));
             }
           }
-        } catch (_) {}
+        } catch (err, stack) {
+          assert(() {
+            debugPrint('stroke_delta 적용 실패: $err');
+            debugPrint('$stack');
+            return true;
+          }());
+        }
         break;
       case 'text_delta':
         final id = e.payload['id']?.toString();
@@ -750,7 +774,13 @@ class CanvasController extends ChangeNotifier {
 
     try {
       final textId = await _textService.saveText(text);
-      _lastTextPosition = Offset(position.dx, position.dy + 30); // 다음 위치
+      // 다음 위치: 줄 수·폰트 크기 반영 (줄바꿈 시 겹침 방지)
+      final lineCount = content.split('\n').length;
+      final pt = fontSize ?? _textFontSize;
+      const lineHeightRatio = 1.3;
+      const gapBetweenBlocks = 8.0;
+      final blockHeight = lineCount * pt * lineHeightRatio + gapBetweenBlocks;
+      _lastTextPosition = Offset(position.dx, position.dy + blockHeight);
       if (_roomId != null && !_disposed) {
         final preview = content.length > 50 ? '${content.substring(0, 50)}…' : content;
         _roomService.updateLastEvent(_roomId!, eventType: 'text', preview: preview);
@@ -2141,6 +2171,18 @@ class CanvasController extends ChangeNotifier {
     try {
       final firestoreId = await _strokeService.saveStroke(strokeModel);
       stroke.firestoreId = firestoreId;
+      final savedModel = StrokeModel(
+        id: firestoreId,
+        roomId: strokeModel.roomId,
+        senderId: strokeModel.senderId,
+        points: strokeModel.points,
+        style: strokeModel.style,
+        createdAt: strokeModel.createdAt,
+        isConfirmed: false,
+        isDeleted: false,
+      );
+      _serverStrokes = [..._serverStrokes, savedModel];
+      _serverStrokes.sort((a, b) => a.createdAt.compareTo(b.createdAt));
       if (_roomId != null && !_disposed) {
         _roomService.updateLastEvent(_roomId!, eventType: 'stroke', preview: '손글씨');
         final payload = strokeModel.toRtdbPayload()..['id'] = firestoreId;
@@ -2175,6 +2217,18 @@ class CanvasController extends ChangeNotifier {
       try {
         final firestoreId = await _strokeService.saveStroke(item.model);
         item.stroke.firestoreId = firestoreId;
+        final savedModel = StrokeModel(
+          id: firestoreId,
+          roomId: item.model.roomId,
+          senderId: item.model.senderId,
+          points: item.model.points,
+          style: item.model.style,
+          createdAt: item.model.createdAt,
+          isConfirmed: false,
+          isDeleted: false,
+        );
+        _serverStrokes = [..._serverStrokes, savedModel];
+        _serverStrokes.sort((a, b) => a.createdAt.compareTo(b.createdAt));
         if (_roomId != null && !_disposed) {
           _roomService.updateLastEvent(_roomId!, eventType: 'stroke', preview: '손글씨');
           final payload = item.model.toRtdbPayload()..['id'] = firestoreId;

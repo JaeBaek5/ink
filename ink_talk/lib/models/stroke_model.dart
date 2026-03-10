@@ -89,25 +89,35 @@ class StrokeModel {
     return StrokeModel.fromMap(data, id: doc.id);
   }
 
-  /// RTDB 이벤트 payload용 (createdAt = millis)
+  /// RTDB 이벤트 payload용 (createdAt = millis). RTDB/JSON에서 오는 동적 타입 방어.
   factory StrokeModel.fromRtdbMap(Map<String, dynamic> data, {String? id}) {
-    final pointsData = data['points'] as List<dynamic>? ?? [];
-    final points = pointsData
-        .map((p) => StrokePoint.fromMap(p as Map<String, dynamic>))
-        .toList();
+    final pointsRaw = data['points'];
+    final pointsList = pointsRaw is List ? pointsRaw : <dynamic>[];
+    final points = <StrokePoint>[];
+    for (final item in pointsList) {
+      if (item is Map) {
+        try {
+          points.add(StrokePoint.fromMap(Map<String, dynamic>.from(item)));
+        } catch (_) {}
+      }
+    }
     final createdAt = data['createdAt'];
     final createdAtDt = createdAt is int
         ? DateTime.fromMillisecondsSinceEpoch(createdAt)
-        : (createdAt is Timestamp ? createdAt.toDate() : DateTime.now());
+        : (createdAt is num
+            ? DateTime.fromMillisecondsSinceEpoch(createdAt.toInt())
+            : (createdAt is Timestamp ? createdAt.toDate() : DateTime.now()));
+    final styleRaw = data['style'];
+    final styleMap = styleRaw is Map ? Map<String, dynamic>.from(styleRaw) : <String, dynamic>{};
     return StrokeModel(
       id: id ?? data['id']?.toString() ?? '',
-      roomId: data['roomId'] ?? '',
-      senderId: data['senderId'] ?? '',
+      roomId: data['roomId']?.toString() ?? '',
+      senderId: data['senderId']?.toString() ?? '',
       points: points,
-      style: PenStyle.fromMap(data['style'] as Map<String, dynamic>? ?? {}),
+      style: PenStyle.fromMap(styleMap),
       createdAt: createdAtDt,
-      isConfirmed: data['isConfirmed'] ?? false,
-      isDeleted: data['isDeleted'] ?? false,
+      isConfirmed: data['isConfirmed'] == true,
+      isDeleted: data['isDeleted'] == true,
     );
   }
 
