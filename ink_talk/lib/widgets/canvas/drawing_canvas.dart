@@ -837,78 +837,72 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     );
   }
 
-  /// 액션 바 '...' 메뉴 — 친구 태그·잠금 (사진/영상/PDF 공통), PDF일 때 정렬 방식 포함
+  /// 액션 바 '...' 메뉴 — 팝시트로 친구 태그·잠금 선택 (사진/영상/PDF 공통)
   void _showMediaMoreMenu(BuildContext context, MediaModel media, double barLeft, double barTop, double barWidth) {
-    const barItemWidth = 52.0;
-    final buttonRight = barLeft + barWidth;
-    final buttonLeft = buttonRight - barItemWidth;
-
-    // 메뉴 항목: 'tag' | 'lock' | 'pdf_single' | 'pdf_grid'
-    final items = <PopupMenuItem<String>>[
-      PopupMenuItem<String>(
-        value: 'tag',
-        child: Row(
-          children: [
-            const Icon(Icons.tag, size: 20, color: AppColors.ink),
-            const SizedBox(width: 12),
-            const Text('@친구 태그'),
-          ],
-        ),
-      ),
-      PopupMenuItem<String>(
-        value: 'lock',
-        child: Row(
-          children: [
-            Icon(
-              media.isLocked ? Icons.lock_open : Icons.lock,
-              size: 20,
-              color: AppColors.ink,
-            ),
-            const SizedBox(width: 12),
-            Text(media.isLocked ? '잠금 해제' : '잠금'),
-          ],
-        ),
-      ),
-      if (media.type == MediaType.pdf) ...[
-        PopupMenuItem<String>(
-          value: 'pdf_single',
-          child: Row(
-            children: [
-              Icon(
-                Icons.view_agenda,
-                size: 20,
-                color: widget.controller.getPdfViewMode(media.id) == PdfViewMode.singlePage
-                    ? AppColors.gold
-                    : AppColors.ink,
-              ),
-              const SizedBox(width: 12),
-              const Text('한 페이지 (화살표)'),
-            ],
-          ),
-        ),
-        PopupMenuItem<String>(
-          value: 'pdf_grid',
-          child: Row(
-            children: [
-              Icon(
-                Icons.grid_view,
-                size: 20,
-                color: widget.controller.getPdfViewMode(media.id) == PdfViewMode.grid
-                    ? AppColors.gold
-                    : AppColors.ink,
-              ),
-              const SizedBox(width: 12),
-              const Text('여러 페이지 (그리드)'),
-            ],
-          ),
-        ),
-      ],
-    ];
-
-    showMenu<String>(
+    showModalBottomSheet<String>(
       context: context,
-      position: RelativeRect.fromLTRB(buttonLeft, barTop - 220, buttonRight + 8, barTop + 8),
-      items: items,
+      backgroundColor: AppColors.paper,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.symmetric(vertical: 12),
+                decoration: BoxDecoration(
+                  color: AppColors.border,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              ListTile(
+                leading: const Icon(Icons.tag, color: AppColors.ink),
+                title: const Text('@친구 태그'),
+                onTap: () {
+                  Navigator.pop(ctx, 'tag');
+                },
+              ),
+              ListTile(
+                leading: Icon(
+                  media.isLocked ? Icons.lock_open : Icons.lock,
+                  color: AppColors.ink,
+                ),
+                title: Text(media.isLocked ? '잠금 해제' : '잠금'),
+                onTap: () {
+                  Navigator.pop(ctx, 'lock');
+                },
+              ),
+              if (media.type == MediaType.pdf) ...[
+                ListTile(
+                  leading: Icon(
+                    Icons.view_agenda,
+                    color: widget.controller.getPdfViewMode(media.id) == PdfViewMode.singlePage
+                        ? AppColors.gold
+                        : AppColors.ink,
+                  ),
+                  title: const Text('한 페이지 (화살표)'),
+                  onTap: () => Navigator.pop(ctx, 'pdf_single'),
+                ),
+                ListTile(
+                  leading: Icon(
+                    Icons.grid_view,
+                    color: widget.controller.getPdfViewMode(media.id) == PdfViewMode.grid
+                        ? AppColors.gold
+                        : AppColors.ink,
+                  ),
+                  title: const Text('여러 페이지 (그리드)'),
+                  onTap: () => Navigator.pop(ctx, 'pdf_grid'),
+                ),
+              ],
+              const SizedBox(height: 16),
+            ],
+          ),
+        );
+      },
     ).then((value) {
       if (value == null) return;
       switch (value) {
@@ -985,7 +979,7 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     );
   }
 
-  /// 텍스트 옵션 메뉴
+  /// 텍스트 옵션 메뉴 (팝시트): 태그 추가, 삭제
   void _showTextOptions(MessageModel text) {
     showModalBottomSheet(
       context: context,
@@ -1008,12 +1002,114 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
                 ),
               ),
               ListTile(
+                leading: const Icon(Icons.tag, color: AppColors.ink),
+                title: const Text('@친구 태그'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showTagTextFriendPicker(context, text);
+                },
+              ),
+              ListTile(
                 leading: const Icon(Icons.delete_outline, color: Colors.red),
                 title: const Text('삭제', style: TextStyle(color: Colors.red)),
                 onTap: () {
                   Navigator.pop(context);
                   widget.controller.deleteText(text.id);
                 },
+              ),
+              const SizedBox(height: 16),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// 텍스트에 @친구 태그: 친구 선택 시트 후 태그 생성
+  void _showTagTextFriendPicker(BuildContext context, MessageModel text) {
+    final friendProvider = context.read<FriendProvider>();
+    final auth = context.read<AuthProvider>();
+    final userId = auth.user?.uid;
+    if (userId == null) return;
+
+    final tagService = TagService();
+    final areaX = text.positionX ?? 0.0;
+    final areaY = text.positionY ?? 0.0;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.paper,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                margin: const EdgeInsets.symmetric(vertical: 12),
+                decoration: BoxDecoration(
+                  color: AppColors.border,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 16),
+                child: Text('태그할 친구 선택', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+              ),
+              const SizedBox(height: 8),
+              Flexible(
+                child: friendProvider.friends.isEmpty
+                    ? const Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Text('친구가 없습니다. 친구 탭에서 추가해 보세요.'),
+                      )
+                    : ListView.builder(
+                        shrinkWrap: true,
+                        itemCount: friendProvider.friends.length,
+                        itemBuilder: (_, i) {
+                          final friend = friendProvider.friends[i];
+                          final user = friendProvider.getFriendUser(friend.friendId);
+                          final name = user?.displayName ?? user?.email ?? friend.friendId;
+                          return ListTile(
+                            leading: const Icon(Icons.person, color: AppColors.ink),
+                            title: Text(name),
+                            onTap: () async {
+                              Navigator.pop(ctx);
+                              try {
+                                final tag = TagModel(
+                                  id: '',
+                                  roomId: widget.roomId,
+                                  taggerId: userId,
+                                  taggedUserId: friend.friendId,
+                                  targetType: TagTargetType.text,
+                                  targetId: text.id,
+                                  areaX: areaX,
+                                  areaY: areaY,
+                                  areaWidth: 1,
+                                  areaHeight: 1,
+                                  createdAt: DateTime.now(),
+                                );
+                                await tagService.createTag(tag);
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('$name 님을 태그했습니다.')),
+                                  );
+                                }
+                              } catch (e) {
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text('태그 실패: $e')),
+                                  );
+                                }
+                              }
+                            },
+                          );
+                        },
+                      ),
               ),
               const SizedBox(height: 16),
             ],
@@ -1147,45 +1243,8 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
     if (hit == null) {
       return;
     }
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) {
-        return Stack(
-          children: [
-            GestureDetector(
-              onTap: () => Navigator.pop(ctx),
-              child: Container(color: Colors.black.withValues(alpha: 0.3)),
-            ),
-            Positioned(
-              left: 16,
-              right: 16,
-              top: MediaQuery.of(context).size.height * 0.35,
-              child: Material(
-                color: AppColors.paper,
-                borderRadius: BorderRadius.circular(16),
-                child: SafeArea(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      ListTile(
-                        leading: const Icon(Icons.tag, color: AppColors.ink),
-                        title: const Text('@친구 태그'),
-                        onTap: () {
-                          Navigator.pop(ctx);
-                          _showTagStrokeFriendPicker(context, hit.strokeId, hit.areaX, hit.areaY, hit.areaWidth, hit.areaHeight);
-                        },
-                      ),
-                      const SizedBox(height: 8),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ],
-        );
-      },
-    );
+    // 반투명 메뉴 박스 없이 바로 친구 태그 선택 시트로 이동
+    _showTagStrokeFriendPicker(context, hit.strokeId, hit.areaX, hit.areaY, hit.areaWidth, hit.areaHeight);
   }
 
   /// 해당 캔버스 좌표에 있는 스트로크 반환 (id + 영역). 없으면 null.
@@ -1365,8 +1424,8 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
               style: IconButton.styleFrom(
                 minimumSize: Size.zero,
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                foregroundColor: AppColors.ink,
               ),
-              color: AppColors.ink,
               tooltip: '이전 이벤트',
             ),
           ),
@@ -1382,8 +1441,8 @@ class _DrawingCanvasState extends State<DrawingCanvas> {
               style: IconButton.styleFrom(
                 minimumSize: Size.zero,
                 tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                foregroundColor: AppColors.ink,
               ),
-              color: AppColors.ink,
               tooltip: '다음 이벤트',
             ),
           ),

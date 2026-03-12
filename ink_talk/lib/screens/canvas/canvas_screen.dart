@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/constants/app_colors.dart';
+import '../../core/utils/responsive.dart';
 import '../../models/room_model.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/friend_provider.dart';
@@ -107,6 +108,10 @@ class _CanvasScreenState extends State<CanvasScreen> {
         context.read<NetworkConnectivityService>().addListener(_onNetworkChanged);
         // 저장된 기본 펜 설정 적용
         _applyDefaultPenSettings();
+        // 폰에서는 툴바 우측 + 빠른 텍스트 기본
+        if (Responsive.isPhone(context)) {
+          _canvasController.setInputMode(InputMode.quickText);
+        }
 
         // 태그 원본 점프
         if (widget.jumpToPosition != null) {
@@ -139,7 +144,6 @@ class _CanvasScreenState extends State<CanvasScreen> {
   @override
   Widget build(BuildContext context) {
     final authProvider = context.watch<AuthProvider>();
-    final roomProvider = context.watch<RoomProvider>();
     final network = context.watch<NetworkConnectivityService>();
     final userId = authProvider.user?.uid ?? '';
 
@@ -160,22 +164,26 @@ class _CanvasScreenState extends State<CanvasScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              roomProvider.getRoomDisplayName(widget.room, userId),
-              style: const TextStyle(fontSize: 16),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  (widget.room.name != null && widget.room.name!.isNotEmpty)
+                      ? widget.room.name!
+                      : '제목없음',
+                  style: const TextStyle(fontSize: 16),
+                ),
+                const SizedBox(width: 8),
+                Flexible(child: _buildTitleViewingSection(context)),
+              ],
             ),
             ListenableBuilder(
               listenable: _canvasController,
               builder: (context, _) {
                 final sending = _canvasController.sendingStrokesCount;
-                final uploading = _canvasController.isUploading;
-                if (sending == 0 && !uploading) return const SizedBox.shrink();
+                if (sending == 0) return const SizedBox.shrink();
                 return Text(
-                  sending > 0 && uploading
-                      ? '전송 중 ${sending}건 · 업로드 중'
-                      : sending > 0
-                          ? '전송 중 ${sending}건'
-                          : '업로드 중',
+                  '전송 중 ${sending}건',
                   style: TextStyle(
                     fontSize: 11,
                     color: AppColors.mutedGray,
@@ -186,29 +194,6 @@ class _CanvasScreenState extends State<CanvasScreen> {
           ],
         ),
         actions: [
-          // Undo / Redo (문서 스펙: 상단 바)
-          ListenableBuilder(
-            listenable: _canvasController,
-            builder: (_, __) {
-              final canUndo = _canvasController.canUndo;
-              final canRedo = _canvasController.canRedo;
-              return Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.undo),
-                    onPressed: canUndo ? () => _canvasController.undo() : null,
-                    tooltip: '되돌리기',
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.redo),
-                    onPressed: canRedo ? () => _canvasController.redo() : null,
-                    tooltip: '다시 실행',
-                  ),
-                ],
-              );
-            },
-          ),
           // 멤버 수
           if (widget.room.type == RoomType.group)
             Padding(
@@ -353,24 +338,232 @@ class _CanvasScreenState extends State<CanvasScreen> {
             ),
           ),
 
-          // 펜 툴바 — 맨 위 레이어로 그리기 (다른 오버레이에 가리지 않도록)
+          // 펜 툴바 — 폰: 우측 세로, 그 외: 상단 가로
           ListenableBuilder(
             listenable: _canvasController,
             builder: (_, __) {
               final showBanner = !network.isOnline || _canvasController.hasPendingQueue;
+              final isPhone = Responsive.isPhone(context);
               return Positioned(
-                left: 0,
-                right: 0,
+                left: isPhone ? null : 0,
+                right: isPhone ? 0 : null,
                 top: showBanner ? 52 : 0,
+                bottom: isPhone ? 0 : null,
+                width: isPhone ? 56 : null,
                 child: PenToolbar(
                   controller: _canvasController,
                   canEditShapes: widget.room.canEditShapes,
+                  vertical: isPhone,
                 ),
               );
             },
           ),
         ],
       ),
+    );
+  }
+
+  /// 탑바 제목 옆: N명 접속 + 접속 인원 아바타 가로 스크롤. 탭 시 멤버 보기 시트 표시 (0명 접속이어도 동작)
+  Widget _buildTitleViewingSection(BuildContext context) {
+    final roomProvider = context.read<RoomProvider>();
+    final stream = _canvasController.roomViewingIdsStream;
+    return GestureDetector(
+      onTap: () => _showMemberListSheet(context),
+      child: stream == null
+          ? Text(
+              '0명 접속',
+              style: const TextStyle(fontSize: 12, color: AppColors.mutedGray, decoration: TextDecoration.underline),
+            )
+          : StreamBuilder<List<String>>(
+              stream: stream,
+              initialData: const [],
+              builder: (context, snapshot) {
+                final viewingIds = snapshot.data ?? [];
+                final count = viewingIds.length;
+                return Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '$count명 접속',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.mutedGray,
+                        decoration: TextDecoration.underline,
+                      ),
+                    ),
+                    if (viewingIds.isNotEmpty) ...[
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: SizedBox(
+                          height: 32,
+                          child: ListView.separated(
+                            scrollDirection: Axis.horizontal,
+                            itemCount: viewingIds.length,
+                            separatorBuilder: (_, __) => const SizedBox(width: 4),
+                            itemBuilder: (context, index) {
+                              final uid = viewingIds[index];
+                              final user = roomProvider.getMemberUser(uid);
+                              final label = user?.visibleId ?? uid;
+                              return Tooltip(
+                                message: label,
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    border: Border.all(color: Colors.green, width: 2),
+                                  ),
+                                  child: CircleAvatar(
+                                    radius: 14,
+                                    backgroundColor: AppColors.border,
+                                    backgroundImage: user?.photoUrl != null && (user!.photoUrl?.isNotEmpty ?? false)
+                                        ? NetworkImage(user.photoUrl!)
+                                        : null,
+                                    child: (user?.photoUrl ?? '').isEmpty
+                                        ? Text(
+                                            (user?.displayName ?? label).isNotEmpty
+                                                ? (user?.displayName ?? label).substring(0, 1).toUpperCase()
+                                                : '?',
+                                            style: const TextStyle(color: AppColors.ink, fontSize: 12),
+                                          )
+                                        : null,
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                );
+              },
+            ),
+    );
+  }
+
+  /// 탑바 "N명 접속" 탭 시: 채팅방 멤버 목록 시트 (상단에서 슬라이드, 접속 중인 멤버는 녹색 외곽선)
+  void _showMemberListSheet(BuildContext context) {
+    final roomProvider = context.read<RoomProvider>();
+    final viewingIdsStream = _canvasController.roomViewingIdsStream;
+    showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: MaterialLocalizations.of(context).modalBarrierDismissLabel,
+      barrierColor: Colors.black54,
+      transitionDuration: const Duration(milliseconds: 250),
+      transitionBuilder: (context, animation, secondaryAnimation, child) {
+        return Align(
+          alignment: Alignment.topCenter,
+          child: SlideTransition(
+            position: Tween<Offset>(
+              begin: const Offset(0, -1),
+              end: Offset.zero,
+            ).animate(CurvedAnimation(parent: animation, curve: Curves.easeOut)),
+            child: child,
+          ),
+        );
+      },
+      pageBuilder: (sheetContext, animation, secondaryAnimation) {
+        return SafeArea(
+          bottom: false,
+          child: Material(
+            color: AppColors.paper,
+            borderRadius: const BorderRadius.vertical(bottom: Radius.circular(16)),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Container(
+                  width: 40,
+                  height: 4,
+                  margin: const EdgeInsets.symmetric(vertical: 12),
+                  decoration: BoxDecoration(
+                    color: AppColors.border,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                  child: Text(
+                    '채팅방 멤버',
+                    style: Theme.of(sheetContext).textTheme.titleMedium,
+                  ),
+                ),
+                ConstrainedBox(
+                  constraints: BoxConstraints(maxHeight: MediaQuery.of(sheetContext).size.height * 0.4),
+                  child: viewingIdsStream == null
+                      ? _buildMemberList(sheetContext, roomProvider, const <String>{})
+                      : StreamBuilder<List<String>>(
+                          stream: viewingIdsStream,
+                          initialData: const [],
+                          builder: (context, snapshot) {
+                            final list = snapshot.hasError ? <String>[] : (snapshot.data ?? <String>[]);
+                            final viewingIds = Set<String>.from(list);
+                            return _buildMemberList(sheetContext, roomProvider, viewingIds);
+                          },
+                        ),
+                ),
+                const SizedBox(height: 16),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildMemberList(BuildContext context, RoomProvider roomProvider, Set<String> viewingIds) {
+    final memberIds = List<String>.from(widget.room.memberIds);
+    if (memberIds.isEmpty) {
+      return const Padding(
+        padding: EdgeInsets.all(24),
+        child: Center(child: Text('멤버 없음', style: TextStyle(color: AppColors.mutedGray))),
+      );
+    }
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+      itemCount: memberIds.length,
+      itemBuilder: (context, index) {
+        final memberId = memberIds[index];
+        final user = roomProvider.getMemberUser(memberId);
+        final isViewing = viewingIds.contains(memberId);
+        final label = user?.visibleId ?? memberId;
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 12),
+          child: Row(
+            children: [
+              Container(
+                decoration: isViewing
+                    ? BoxDecoration(
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.green, width: 2),
+                      )
+                    : null,
+                child: CircleAvatar(
+                  radius: 24,
+                  backgroundColor: AppColors.border,
+                  backgroundImage: user?.photoUrl != null && (user?.photoUrl?.isNotEmpty ?? false)
+                      ? NetworkImage(user!.photoUrl!)
+                      : null,
+                  child: (user?.photoUrl ?? '').isEmpty
+                      ? Text(
+                          (user?.displayName ?? label).isNotEmpty
+                              ? (user?.displayName ?? label).substring(0, 1).toUpperCase()
+                              : '?',
+                          style: const TextStyle(color: AppColors.ink, fontSize: 18),
+                        )
+                      : null,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Text(label, style: const TextStyle(fontSize: 16)),
+              if (isViewing) ...[
+                const SizedBox(width: 8),
+                Text('접속 중', style: TextStyle(fontSize: 12, color: Colors.green.shade700)),
+              ],
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -414,17 +607,23 @@ class _CanvasScreenState extends State<CanvasScreen> {
                       ),
                     ),
                   ),
-                  SizedBox(
-                    width: 52,
-                    height: 28,
-                    child: Center(
-                      child: Text(
-                        '$scalePercent%',
-                        textAlign: TextAlign.center,
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.ink,
+                  Tooltip(
+                    message: '더블탭: 100%로',
+                    child: GestureDetector(
+                      onDoubleTap: () => _canvasController.zoomTo100(viewportCenter),
+                      child: SizedBox(
+                        width: 52,
+                        height: 28,
+                        child: Center(
+                          child: Text(
+                            '$scalePercent%',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.ink,
+                            ),
+                          ),
                         ),
                       ),
                     ),
@@ -542,14 +741,6 @@ class _CanvasScreenState extends State<CanvasScreen> {
                 onTap: () {
                   Navigator.pop(context);
                   _shareLink();
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.people_outline),
-                title: const Text('멤버 보기'),
-                onTap: () {
-                  Navigator.pop(context);
-                  // TODO: 멤버 보기
                 },
               ),
               ListTile(

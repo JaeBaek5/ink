@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import '../../core/utils/firestore_retry.dart';
 import '../../models/message_model.dart';
 import '../../models/shape_model.dart';
 import '../../models/stroke_model.dart';
@@ -178,6 +179,12 @@ class CanvasController extends ChangeNotifier {
   }
 
   String? _roomId;
+  /// 현재 화면 보고 있는 접속 인원 수 스트림 (탑바 표시용)
+  Stream<int>? _roomViewingCountStream;
+  Stream<int>? get roomViewingCountStream => _roomViewingCountStream;
+  /// 현재 접속 중인 UID 목록 (접속 패널 녹색 외곽선용)
+  Stream<List<String>>? _roomViewingIdsStream;
+  Stream<List<String>>? get roomViewingIdsStream => _roomViewingIdsStream;
   String? _userId;
   String? _userName;
   /// 방 설정: 캔버스 확장 방식 (방장이 방 설정에서 지정, 확장 로직에서 사용)
@@ -284,9 +291,14 @@ class CanvasController extends ChangeNotifier {
     }
   }
 
-  // 미디어 업로드 중
-  bool _isUploading = false;
-  bool get isUploading => _isUploading;
+  // 미디어 업로드 중 (버튼별 로딩 표시)
+  bool _isUploadingImage = false;
+  bool _isUploadingVideo = false;
+  bool _isUploadingPdf = false;
+  bool get isUploading => _isUploadingImage || _isUploadingVideo || _isUploadingPdf;
+  bool get isUploadingImage => _isUploadingImage;
+  bool get isUploadingVideo => _isUploadingVideo;
+  bool get isUploadingPdf => _isUploadingPdf;
 
   /// 업로드 중 표시용 플레이스홀더 (박스 먼저 만들고 로딩 표시)
   final List<UploadingPlaceholder> _uploadingPlaceholders = [];
@@ -306,6 +318,16 @@ class CanvasController extends ChangeNotifier {
     final screenCenter = Offset(s.width / 2, s.height / 2);
     return (screenCenter - _canvasOffset) / _canvasScale;
   }
+
+  /// 현재 보이는 화면(뷰포트) 캔버스 크기의 비율. 업로드 시 크기·중앙 배치용.
+  Size? _getViewportPercentSize(double fraction) {
+    final viewSize = _getViewportCanvasSize();
+    if (viewSize == null || viewSize.width <= 0 || viewSize.height <= 0) return null;
+    return Size(viewSize.width * fraction, viewSize.height * fraction);
+  }
+
+  Size? _getViewport20PercentSize() => _getViewportPercentSize(0.2);
+  Size? _getViewport30PercentSize() => _getViewportPercentSize(0.3);
 
   /// PDF 보기 방식 (미디어 ID별, 기본: 한 페이지 + 화살표)
   final Map<String, PdfViewMode> _pdfViewModes = {};
@@ -525,6 +547,9 @@ class CanvasController extends ChangeNotifier {
       String? blockedUserId,
       DateTime? blockedAt}) {
     _roomId = roomId;
+    _roomViewingCountStream = _rtdbRoom.roomViewingCountStream(roomId);
+    // 앱바·멤버 시트에서 동시 구독 가능하도록 브로드캐스트 스트림으로 노출
+    _roomViewingIdsStream = _rtdbRoom.roomViewingIdsStream(roomId).asBroadcastStream();
     _userId = userId;
     _userName = userName;
     _canvasExpandMode = canvasExpandMode;
@@ -591,24 +616,27 @@ class CanvasController extends ChangeNotifier {
         },
         onError: (err) => debugPrint('RTDB 스트림 오류: $err'),
       );
-      // 손글씨 실시간 보조: Firestore 스트림으로 RTDB에서 누락된 새 스트로크 반영
-      _strokesSubscription = _strokeService.getStrokesStream(roomId).listen((firestoreStrokes) {
-        if (_disposed) return;
-        final filtered = _applyStrokeFilter(firestoreStrokes);
-        final existingIds = _serverStrokes.map((s) => s.id).toSet();
-        var merged = List<StrokeModel>.from(_serverStrokes);
-        for (final s in filtered) {
-          if (!existingIds.contains(s.id)) {
-            merged.add(s);
-            existingIds.add(s.id);
+      // 손글씨 실시간 보조: Firestore 스트림으로 RTDB에서 누락된 새 스트로크 반영 (일시 오류 시 재시도)
+      _strokesSubscription = streamWithRetry(() => _strokeService.getStrokesStream(roomId)).listen(
+        (firestoreStrokes) {
+          if (_disposed) return;
+          final filtered = _applyStrokeFilter(firestoreStrokes);
+          final existingIds = _serverStrokes.map((s) => s.id).toSet();
+          var merged = List<StrokeModel>.from(_serverStrokes);
+          for (final s in filtered) {
+            if (!existingIds.contains(s.id)) {
+              merged.add(s);
+              existingIds.add(s.id);
+            }
           }
-        }
-        if (merged.length != _serverStrokes.length) {
-          merged.sort((a, b) => a.createdAt.compareTo(b.createdAt));
-          _serverStrokes = merged;
-          _notifyIfNotDisposed();
-        }
-      });
+          if (merged.length != _serverStrokes.length) {
+            merged.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+            _serverStrokes = merged;
+            _notifyIfNotDisposed();
+          }
+        },
+        onError: (e) => debugPrint('Firestore 스트로크 스트림 오류(재시도 소진): $e'),
+      );
       _notifyIfNotDisposed();
     });
     Future.microtask(() {
@@ -1035,7 +1063,7 @@ class CanvasController extends ChangeNotifier {
     }
 
     // 탭 직후 바로 로딩 표시 (갤러리 열리기 전에 반응 있음)
-    _isUploading = true;
+    _isUploadingImage = true;
     _notifyIfNotDisposed();
 
     XFile? file;
@@ -1043,14 +1071,14 @@ class CanvasController extends ChangeNotifier {
       file = await _mediaService.pickImage();
     } catch (e) {
       debugPrint('갤러리 열기 오류: $e');
-      _isUploading = false;
+      _isUploadingImage = false;
       _notifyIfNotDisposed();
       uploadMessageCallback?.call('사진 선택 중 오류가 났습니다. 권한을 확인해 주세요.');
       return;
     }
 
     if (file == null) {
-      _isUploading = false;
+      _isUploadingImage = false;
       _notifyIfNotDisposed();
       uploadMessageCallback?.call('사진 선택이 취소되었습니다.');
       return;
@@ -1072,29 +1100,26 @@ class CanvasController extends ChangeNotifier {
         // 크기 조회 실패 시 기본값 유지
       }
 
-      final viewSize = _getViewportCanvasSize();
-      // 화면 비율에 맞게: 뷰포트 캔버스 크기 안에 맞추기 (100%면 뷰포트, 50%면 그 비율)
+      // 지금 보는 화면 비율의 30% 박스 안에 이미지 비율 유지하며 맞춤
+      final box20 = _getViewport30PercentSize();
       double displayW = width.toDouble();
       double displayH = height.toDouble();
-      if (viewSize != null && width > 0 && height > 0) {
-        final scaleW = viewSize.width / width;
-        final scaleH = viewSize.height / height;
-        final scale = scaleW < scaleH ? scaleW : scaleH;
+      if (box20 != null && width > 0 && height > 0) {
+        final scale = (box20.width / width).clamp(0.0, double.infinity) < (box20.height / height)
+            ? box20.width / width
+            : box20.height / height;
         displayW = width * scale;
         displayH = height * scale;
       } else if (width > 0 && height > 0) {
-        const double maxSide = 600;
-        if (width > maxSide || height > maxSide) {
-          final scale = maxSide / (width > height ? width : height);
+        const double maxSide = 400.0;
+        final scale = maxSide / (width > height ? width : height);
+        if (scale < 1.0) {
           displayW = width * scale;
           displayH = height * scale;
         }
       }
-      // 사진 크기를 1/3로 (너무 크지 않게)
-      displayW /= 3;
-      displayH /= 3;
 
-      // 이미지 중앙이 보이는 화면 중앙과 일치하도록 위치 계산 (좌상단 = 화면중앙 - 크기/2)
+      // 객체 중앙이 화면 중앙에 오도록 위치 (좌상단 = 화면중앙 - 크기/2)
       final viewportCenter = _getViewportCenterInCanvas();
       if (viewportCenter != null) {
         position = viewportCenter - Offset(displayW / 2, displayH / 2);
@@ -1164,21 +1189,21 @@ class CanvasController extends ChangeNotifier {
       }
     } finally {
       _uploadingPlaceholders.removeWhere((p) => p.tempId == tempId);
-      _isUploading = false;
+      _isUploadingImage = false;
       _notifyIfNotDisposed();
     }
   }
 
-  /// 영상 업로드 (영상 중앙이 화면 중앙에 오도록 배치)
+  /// 영상 업로드 (화면 20% 크기, 객체 중앙이 화면 중앙에 오도록 배치)
   Future<void> uploadVideo(Offset position) async {
     if (_roomId == null || _userId == null) return;
 
     final file = await _mediaService.pickVideo();
     if (file == null) return;
 
-    final viewSize = _getViewportCanvasSize();
-    final placeW = viewSize?.width ?? 300.0;
-    final placeH = viewSize?.height ?? 200.0;
+    final box20 = _getViewport20PercentSize();
+    final placeW = box20?.width ?? 300.0;
+    final placeH = box20?.height ?? 200.0;
     final viewportCenter = _getViewportCenterInCanvas();
     if (viewportCenter != null) {
       position = viewportCenter - Offset(placeW / 2, placeH / 2);
@@ -1192,7 +1217,7 @@ class CanvasController extends ChangeNotifier {
       height: placeH,
       type: MediaType.video,
     ));
-    _isUploading = true;
+    _isUploadingVideo = true;
     _notifyIfNotDisposed();
 
     try {
@@ -1253,21 +1278,30 @@ class CanvasController extends ChangeNotifier {
       debugPrint('영상 업로드 오류: $e');
     } finally {
       _uploadingPlaceholders.removeWhere((p) => p.tempId == tempId);
-      _isUploading = false;
+      _isUploadingVideo = false;
       _notifyIfNotDisposed();
     }
   }
 
-  /// PDF 업로드 (PDF 중앙이 화면 중앙에 오도록 배치)
+  /// PDF 업로드 (화면 20% 크기, A4 비율 유지, 객체 중앙이 화면 중앙에 오도록 배치)
   Future<void> uploadPdf(Offset position) async {
     if (_roomId == null || _userId == null) return;
 
     final file = await _mediaService.pickPdf();
     if (file == null || file.path == null) return;
 
-    // 플레이스홀더·최종 PDF 동일 크기 (A4 비율 210:297)
-    const placeW = 210.0;
-    const placeH = 297.0;
+    const a4W = 210.0;
+    const a4H = 297.0;
+    final box20 = _getViewport20PercentSize();
+    double placeW = a4W;
+    double placeH = a4H;
+    if (box20 != null && box20.width > 0 && box20.height > 0) {
+      final scale = (box20.width / a4W).clamp(0.0, double.infinity) < (box20.height / a4H)
+          ? box20.width / a4W
+          : box20.height / a4H;
+      placeW = a4W * scale;
+      placeH = a4H * scale;
+    }
     final viewportCenter = _getViewportCenterInCanvas();
     if (viewportCenter != null) {
       position = viewportCenter - Offset(placeW / 2, placeH / 2);
@@ -1281,7 +1315,7 @@ class CanvasController extends ChangeNotifier {
       height: placeH,
       type: MediaType.pdf,
     ));
-    _isUploading = true;
+    _isUploadingPdf = true;
     _notifyIfNotDisposed();
 
     try {
@@ -1326,7 +1360,7 @@ class CanvasController extends ChangeNotifier {
       debugPrint('PDF 업로드 오류: $e');
     } finally {
       _uploadingPlaceholders.removeWhere((p) => p.tempId == tempId);
-      _isUploading = false;
+      _isUploadingPdf = false;
       _notifyIfNotDisposed();
     }
   }
@@ -2442,6 +2476,12 @@ class CanvasController extends ChangeNotifier {
   /// 버튼으로 축소 (우측 하단 - 버튼용)
   void zoomOut(Offset viewportCenter) {
     zoom(0.8, viewportCenter);
+  }
+
+  /// 비율을 100%로 맞춤 (확대/축소 숫자 더블탭용)
+  void zoomTo100(Offset viewportCenter) {
+    if ((_canvasScale - 1.0).abs() < 0.001) return;
+    zoom(1.0 / _canvasScale, viewportCenter);
   }
 
   /// 줌 버튼용 뷰포트 중심 (캔버스 뷰포트와 동일 좌표계 — 사진 어긋남 방지)
